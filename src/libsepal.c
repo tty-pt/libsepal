@@ -13,6 +13,7 @@
 #include <ttypt/qmap.h>
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <xxhash.h>
@@ -993,4 +994,147 @@ sepal_rank(struct sepal_rank_ctx *ctx, rec_ref_t ref, float *score)
 		return -1;
 	*score = s;
 	return 0;
+}
+/* ---- rec_query axis registration (sepal / meaning) ---- */
+
+struct rec_sepal_params {
+	float  *q;       /* heap-owned query vector, freed never (see decode) */
+	size_t  qdim;
+	size_t  m;
+	float   min_sim;
+};
+
+static int sepal_axis_fill(void *ctx, void *params, rec_set_t *out)
+{
+	sepal_vecstore_t *vs = ctx;
+	const struct rec_sepal_params *p = params;
+
+	if (!p || !p->q)
+		return -1;
+	return sepal_fill_approx(vs, p->q, p->qdim, p->m, p->min_sim, out);
+}
+
+static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
+{
+	const struct rec_sepal_params *p = params;
+	struct sepal_rank_ctx sc;
+
+	if (!p || !p->q)
+		return -1;
+	sc.vs = ctx;
+	sc.q = p->q;
+	sc.qdim = p->qdim;
+	sc.min_sim = p->min_sim;
+	return sepal_rank(&sc, ref, score);
+}
+
+/*
+ * Decode "file=vecs.bin qdim=256 m=10 min_sim=0.5" into a heap-owned
+ * rec_sepal_params (freed never — one-shot CLI process lifetime, matches
+ * the other axis decode fns). `file` is a flat little-endian float32 blob
+ * of exactly qdim floats (NOT a VEC1 blob — that format is for entries
+ * inside a sepal_vecstore_t, not for a one-off CLI query vector). `file`
+ * and `qdim` are required; `m` (candidate pool, 0 = library default) and
+ * `min_sim` (default 0.0) are optional. NULL on missing/unreadable file,
+ * missing qdim, or OOM.
+ */
+static void *sepal_axis_decode(const char *s)
+{
+	struct rec_sepal_params *p;
+	char *buf, *cur;
+	const char *file = NULL;
+	size_t qdim = 0, m = 0;
+	float min_sim = 0.0f;
+	FILE *f;
+
+	if (!s)
+		return NULL;
+	buf = malloc(strlen(s) + 1);
+	if (!buf)
+		return NULL;
+	strcpy(buf, s);
+	cur = buf;
+	while (*cur) {
+		char *key, *val;
+
+		while (*cur == ' ')
+			cur++;
+		if (!*cur)
+			break;
+		key = cur;
+		while (*cur && *cur != '=' && *cur != ' ')
+			cur++;
+		if (*cur != '=') {
+			if (*cur)
+				cur++;
+			continue;
+		}
+		*cur++ = '\0';
+		val = cur;
+		while (*cur && *cur != ' ')
+			cur++;
+		if (*cur)
+			*cur++ = '\0';
+		if (!strcmp(key, "file"))
+			file = val;
+		else if (!strcmp(key, "qdim"))
+			qdim = (size_t)atol(val);
+		else if (!strcmp(key, "m"))
+			m = (size_t)atol(val);
+		else if (!strcmp(key, "min_sim"))
+			min_sim = (float)atof(val);
+	}
+	if (!file || qdim == 0) {
+		free(buf);
+		return NULL;
+	}
+	p = calloc(1, sizeof(*p));
+	if (!p) {
+		free(buf);
+		return NULL;
+	}
+	p->q = malloc(qdim * sizeof(float));
+	if (!p->q) {
+		free(p);
+		free(buf);
+		return NULL;
+	}
+	f = fopen(file, "rb");
+	if (!f || fread(p->q, sizeof(float), qdim, f) != qdim) {
+		if (f)
+			fclose(f);
+		free(p->q);
+		free(p);
+		free(buf);
+		return NULL;
+	}
+	fclose(f);
+	p->qdim = qdim;
+	p->m = m;
+	p->min_sim = min_sim;
+	free(buf);
+	return p;
+}
+
+__attribute__((constructor)) static void sepal_rec_axis_init(void)
+{
+	static const rec_axis_t sepal_axis = {
+		"sepal", sepal_axis_fill, sepal_axis_rank, NULL, sepal_axis_decode
+	};
+
+	rec_axis_register(&sepal_axis);
+}
+
+/*
+ * rec_axis_open convention (PLAN-REC-QUERY.md §4.3, optional CLI-open
+ * convention, not part of libqmap's core rec_query registry API): spec
+ * is the sepal_open() fname, or empty/NULL for a memory-only store.
+ * Returns the sepal_vecstore_t* ctx directly (no cast needed, unlike
+ * the joint/islet handle-widening axes) -- NULL on open failure.
+ */
+void *rec_axis_open(const char *spec)
+{
+	int err;
+
+	return sepal_open(spec && *spec ? spec : NULL, &err);
 }

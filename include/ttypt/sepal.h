@@ -60,6 +60,16 @@ typedef struct sepal_hit {
 sepal_vecstore_t *sepal_open(const char *fname, int *err);
 void              sepal_close(sepal_vecstore_t *vs);
 
+/*
+ * rec_axis_open (PLAN-REC-QUERY.md §4.3, optional CLI-open convention,
+ * not part of libqmap's core rec_query registry API): opens a sepal
+ * store from an opaque spec string (the sepal_open() fname, or
+ * empty/NULL for a memory-only store) and returns the ctx a caller then
+ * passes to rec_axis_set_ctx() -- the sepal_vecstore_t* directly, NULL
+ * on open failure.
+ */
+void *rec_axis_open(const char *spec);
+
 /* ---------------------------------------------------------------------.
  *  Vectors (blobs)                                                     */
 /** Store vector v (full_dim floats); dim stored = min(full_dim,
