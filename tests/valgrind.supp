@@ -1,0 +1,17 @@
+# libsepal valgrind suppressions.
+#
+# KNOWN KERNEL ARTIFACT (libqmap, not libsepal):
+# qmap_open() on a persistent file pushes the new handle onto a per-file id
+# registry (ids_push, idm.c) that the kernel never drains in-process — 32
+# bytes per file (re)open. The block is allocated and owned entirely by
+# libqmap; libsepal frees everything it allocates (verified by running the
+# suite with this suppression: no other leaks remain). Logged for the kernel
+# maintainers; fixing it belongs to a kernel quest, not R5a.
+{
+   libqmap per-file id registry (qmap_open -> ids_push)
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   fun:ids_push
+   fun:qmap_open
+}

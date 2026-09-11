@@ -1,0 +1,3 @@
+PROJECT_NAME           = "Sepal"
+@INCLUDE = ../mk/Doxyfile
+EXTRACT_STATIC         = YES

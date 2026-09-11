@@ -1,0 +1,11 @@
+# AddressSanitizer suppressions (same story as valgrind.supp).
+#
+# KNOWN KERNEL ARTIFACT (libqmap, not libsepal):
+# the kernel keeps the *borrowed* filename pointer passed to qmap_open() and
+# its exit-time destructor (qmap_destruct -> qmap_close -> qmap_get ->
+# qmap_id_ex -> strlen) dereferences it after the caller's frame returned
+# (stack-use-after-return on the consumer's path buffer). In practice the
+# stale stack bytes still hold the path at exit, so this is benign outside
+# sanitizers — but it is a genuine kernel ownership bug, also exercised by
+# mm's own reopen flows. Fixing it belongs to a kernel quest, not R5a.
+interceptor_via_fun:qmap_destruct
