@@ -33,6 +33,52 @@ test_rank_matches_cosine(void)
 }
 
 static void
+test_rank_score_equiv_dimensions(void)
+{
+	printf("=== rank: stage-2 score == sepal_cosine across dims/norms ===\n");
+	sepal_vecstore_t *vs = sepal_open(NULL, NULL);
+	ASSERT_NOT_NULL(vs);
+
+	static const size_t dims[] = { 1, 2, 7, 63, 64, 65, 128, 256 };
+	sepal_rng_t r = { 101 };
+	for (size_t i = 0; i < sizeof(dims) / sizeof(dims[0]); i++) {
+		size_t d = dims[i];
+		float *vu = malloc(d * sizeof(float));
+		float *v = malloc(d * sizeof(float));
+		float *q = malloc(d * sizeof(float));
+		ASSERT_NOT_NULL(vu); ASSERT_NOT_NULL(v); ASSERT_NOT_NULL(q);
+		/* unit vector (stored norm == 1) */
+		rng_unit_vector(&r, vu, d);
+		rng_unit_vector(&r, q, d);
+		ASSERT_EQ(sepal_put(vs, (rec_ref_t)(d * 2 + 1), vu, d), 0);
+		struct sepal_rank_ctx c = { vs, q, d, -1.0f };
+		float sc = -1.0f;
+		ASSERT_EQ(sepal_rank(&c, (rec_ref_t)(d * 2 + 1), &sc), 0);
+		ASSERT_NEAR(sc, sepal_cosine(vu, q, d), 1e-6f);
+
+		/* scaled vector (stored norm != 1) exercises the frozen norm */
+		for (size_t j = 0; j < d; j++)
+			v[j] = (float)rng_unit(&r) * 3.0f;
+		ASSERT_EQ(sepal_put(vs, (rec_ref_t)(d * 2 + 2), v, d), 0);
+		ASSERT_EQ(sepal_rank(&c, (rec_ref_t)(d * 2 + 2), &sc), 0);
+		ASSERT_NEAR(sc, sepal_cosine(v, q, d), 1e-6f);
+
+		/* q longer than stored dim: score over the stored prefix */
+		float *qlong = malloc((d + 32) * sizeof(float));
+		rng_unit_vector(&r, qlong, d + 32);
+		struct sepal_rank_ctx c2 = { vs, qlong, d + 32, -1.0f };
+		float sl = -1.0f;
+		ASSERT_EQ(sepal_rank(&c2, (rec_ref_t)(d * 2 + 1), &sl), 0);
+		ASSERT_NEAR(sl, sepal_cosine(vu, qlong, d), 1e-6f);
+		free(qlong);
+		free(q);
+		free(v);
+		free(vu);
+	}
+	sepal_close(vs);
+}
+
+static void
 test_rank_missing_below_threshold(void)
 {
 	printf("=== rank: missing ref / min_sim / dims mismatch → nonzero ===\n");
@@ -76,6 +122,7 @@ int
 main(void)
 {
 	test_rank_matches_cosine();
+	test_rank_score_equiv_dimensions();
 	test_rank_missing_below_threshold();
 	return test_summary();
 }

@@ -98,6 +98,101 @@ test_null_guards(void)
 	ASSERT_EQ(sepal_n(NULL), 0);
 }
 
+static void
+test_index_valid_after_mutation(void)
+{
+	printf("=== vecstore: index validate 0 across scripted+random mutation ===\n");
+	sepal_vecstore_t *vs = sepal_open(NULL, NULL);
+	ASSERT_NOT_NULL(vs);
+	ASSERT_EQ(sepal_index_validate(vs), 0);
+
+	float v[300];
+	sepal_rng_t r = { 77 };
+	for (size_t it = 0; it < 3; it++) {          /* 3 mutation passes */
+		size_t base = it * 3000;
+		for (size_t i = 0; i < 300; i++) {
+			rng_unit_vector(&r, v, 128);
+			ASSERT_EQ(sepal_put(vs, (rec_ref_t)(base + i), v, 128), 0);
+		}
+		for (size_t i = 0; i < 100; i++) {       /* rebuild larger dims */
+			rng_unit_vector(&r, v, 300);
+			ASSERT_EQ(sepal_put(vs, (rec_ref_t)(base + 20 + i * 2), v, 300), 0);
+		}
+		for (size_t i = 0; i < 60; i++)         /* deletes */
+			ASSERT_EQ(sepal_del(vs, (rec_ref_t)(base + i * 3)), 0);
+		ASSERT_EQ(sepal_index_validate(vs), 0);
+	}
+	ASSERT_EQ(sepal_n(vs), 720);        /* 3 passes × (300 puts − 60 dels) */
+	ASSERT_EQ(sepal_index_validate(vs), 0);
+	sepal_close(vs);
+}
+
+static void
+test_index_search_parity_after_mutation(void)
+{
+	printf("=== vecstore: search parity (vs brute) after mutation ===\n");
+	const size_t DIM = 192;
+	const rec_ref_t MAXR = 108;
+	sepal_vecstore_t *vs = sepal_open(NULL, NULL);
+	ASSERT_NOT_NULL(vs);
+
+	float v[DIM];
+	sepal_rng_t r = { 78 };
+	for (size_t i = 0; i < 60; i++) {
+		rng_unit_vector(&r, v, DIM);
+		ASSERT_EQ(sepal_put(vs, (rec_ref_t)i, v, DIM), 0);
+	}
+	for (size_t i = 0; i < 15; i++) {          /* some replaces */
+		rng_unit_vector(&r, v, DIM);
+		ASSERT_EQ(sepal_put(vs, (rec_ref_t)(i * 2), v, DIM), 0);
+	}
+	for (size_t i = 0; i < 20; i++)            /* some deletes */
+		ASSERT_EQ(sepal_del(vs, (rec_ref_t)(i * 3 + 1)), 0);
+	for (size_t i = 0; i < 8; i++) {           /* fresh refs beyond 60 */
+		rng_unit_vector(&r, v, DIM);
+		ASSERT_EQ(sepal_put(vs, (rec_ref_t)(100 + i), v, DIM), 0);
+	}
+	ASSERT_EQ(sepal_index_validate(vs), 0);
+
+	/* dump the surviving store via sepal_get into a brute-force base */
+	float *base = malloc(MAXR * DIM * sizeof(float));
+	rec_ref_t survive[MAXR];
+	size_t nsur = 0;
+	float out[DIM];
+	for (rec_ref_t rf = 0; rf < MAXR; rf++) {
+		if (sepal_get(vs, rf, out, DIM) == DIM) {
+			memcpy(base + nsur * DIM, out, DIM * sizeof(float));
+			survive[nsur++] = rf;
+		}
+	}
+	ASSERT_EQ(nsur, sepal_n(vs));
+
+	sepal_bf_hit_t bf[16];
+	sepal_hit_t sh[16];
+	for (size_t qi = 0; qi < 30; qi++) {
+		rng_unit_vector(&r, v, DIM);
+		size_t bfn = brute_force_search(base, nsur, DIM, 256, v, DIM,
+		                                8, 0.0f, bf);
+		for (size_t j = 0; j < bfn; j++)  /* brute ref = index into survive[] */
+			bf[j].ref = survive[bf[j].ref];
+		size_t shn = sepal_search(vs, v, DIM, 8, 0.0f, nsur, sh);
+		ASSERT_EQ(shn, bfn);
+		int inse[16] = { 0 };
+		for (size_t i = 0; i < shn; i++) {
+			for (size_t j = 0; j < bfn; j++)
+				if (sh[i].ref == bf[j].ref) {
+					inse[i] = 1;
+					ASSERT_NEAR(sh[i].score, bf[j].score, 1e-6f);
+				}
+			ASSERT(inse[i], "hit in brute set");
+		}
+		for (size_t i = 1; i < shn; i++)
+			ASSERT(sh[i - 1].score >= sh[i].score, "non-increasing");
+	}
+	free(base);
+	sepal_close(vs);
+}
+
 int
 main(void)
 {
@@ -105,5 +200,7 @@ main(void)
 	test_reput_replaces();
 	test_opaque_refs();
 	test_null_guards();
+	test_index_valid_after_mutation();
+	test_index_search_parity_after_mutation();
 	return test_summary();
 }

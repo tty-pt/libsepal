@@ -22,6 +22,16 @@ fill declares its approximate-ness so downstream recall stays honest.
 - **File persistence**: optional sidecar via libqmap; `sepal_close()` saves
   (never closes — the file would truncate to 0, same invariant as mm);
   the vector count is restored from the file on open
+- **Flat sketch index**: stage-1 scans contiguous `idx_sk` rows
+  (~1 MB at N=10k, L2-resident) instead of walking full blobs — ~3×
+  faster prefilter at N=10k; rebuilt at open, maintained on put/del,
+  `sepal_index_validate()` checks internal consistency
+- **Frozen-norm rerank**: stage-2 scores from one fused dot pass using
+  the put-frozen blob norm + a once-per-query prefix-norm table
+  (semantically equal to `sepal_cosine` within 1e-6)
+- **AVX2 fast path**: sign-bit sketch via `vmovmskps`; Hamming prefilter
+  via 256-bit XOR→nibble-LUT popcount; cosine loops auto-vectorized with
+  FMA; scalar fallback retained for non-AVX2 targets
 - **Caller-opaque refs**: refs are `rec_ref_t` (u64) passed at put time;
   the store never maps refs to schemas
 
@@ -76,6 +86,23 @@ Search: `sepal_search` (two-stage; `m==0` → 10×k capped at N; returns hits
 written ≤ k, best-first, ties by ascending ref).
 Kernel: `sepal_fill_approx` (m==0 → full pool; additive over existing refs),
 `sepal_rank` + `sepal_rank_ctx`.
+
+## Performance (medians-of-3 at N=10000; single clean run at N=100/1000, `bench_search`, k=10, m=100)
+
+| N | dim | exact µs | prefilter µs | rerank µs | total µs | full@10 | mean r@10 |
+|---|---|---|---|---|---|---|---|
+| 100 | 384 | 60 | 13 | 46 | 51 | 1.000 | 1.000 |
+| 1000 | 384 | 869 | 49 | 155 | 81 | 0.030 | 0.676 |
+| 10000 | 384 | 35709 | 235 | 213 | 320 | 0.000 | 0.366 |
+| 100 | 768 | 64 | 18 | 56 | 56 | 1.000 | 1.000 |
+| 1000 | 768 | 1121 | 55 | 94 | 86 | 0.000 | 0.463 |
+| 10000 | 768 | 35828 | 279 | 210 | 372 | 0.000 | 0.164 |
+
+Absolute numbers move 2–3× with machine load (even `exact_us`, which is
+fixed work, swings 40k–50k) — treat single runs as noisy; medians-of-3
+at N=10000 are the reliable row. Vs the pre-AVX2 shipped config (bisect D):
+prefilter 3.3×/4.4×, rerank 1.44×/1.63×, total 2.9×/4.3× faster at
+384/768 dim. Recall columns are unchanged by every tier (D1 semantic rule).
 
 ## Building & testing
 

@@ -79,6 +79,47 @@ size_t bfn = brute_force_search(base, CORPUS_N,
 }
 
 static void
+test_search_score_equiv(void)
+{
+	printf("=== search: stage-2 scores == sepal_cosine per-ref (full pool) ===\n");
+	static const size_t DIMS[] = { 64, 128, 256, 384 };
+	const size_t N = 96;
+	for (size_t di = 0; di < sizeof(DIMS) / sizeof(DIMS[0]); di++) {
+		size_t dim = DIMS[di];
+		sepal_vecstore_t *vs = sepal_open(NULL, NULL);
+		ASSERT_NOT_NULL(vs);
+		float *v = malloc(dim * sizeof(float));
+		ASSERT_NOT_NULL(v);
+		float *base = malloc(N * dim * sizeof(float));
+		ASSERT_NOT_NULL(base);
+		sepal_rng_t r = { 202 + di };
+		for (size_t i = 0; i < N; i++) {
+			rng_unit_vector(&r, v, dim);
+			sepal_put(vs, (rec_ref_t)i, v, dim);
+			memcpy(base + i * dim, v, dim * sizeof(float));
+		}
+		float q[400];
+		for (size_t qi = 0; qi < 20; qi++) {
+			rng_unit_vector(&r, q, dim);
+			sepal_hit_t sh[16];
+			size_t shn = sepal_search(vs, q, dim, 8, 0.1f, N, sh);
+			float refq[256];
+			size_t scored = dim < 256 ? dim : 256; /* h.dim = min(dim, EXACT_DIM) */
+			memcpy(refq, q, scored * sizeof(float));
+			for (size_t i = 0; i < shn; i++) {
+				rec_ref_t rf = sh[i].ref;
+				ASSERT(rf < N, "ref in range");
+				float ref = sepal_cosine(base + rf * dim, refq, scored);
+				ASSERT_NEAR(sh[i].score, ref, 1e-6f);
+			}
+		}
+		free(base);
+		free(v);
+		sepal_close(vs);
+	}
+}
+
+static void
 test_search_ordering_crafted(void)
 {
 	printf("=== search: order = cosine desc (ties none, refs asc) ===\n");
@@ -166,6 +207,7 @@ int
 main(void)
 {
 	test_search_parity();
+	test_search_score_equiv();
 	test_search_ordering_crafted();
 	test_search_knobs();
 	test_search_empty_store();

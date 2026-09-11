@@ -1,9 +1,10 @@
 all := libsepal
 
-LDLIBS-libsepal := -lqsys -lqmap
+LDLIBS-libsepal := -lqsys -lqmap -lxxhash
 LDFLAGS-libsepal := -L/home/quirinpa/site/external/libqmap/lib
 
 CFLAGS := -g
+CFLAGS += -O3 -mpopcnt -mavx2 -mfma
 CFLAGS += -I/home/quirinpa/site/external/libqmap/include
 
 include ../mk/include.mk

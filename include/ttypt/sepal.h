@@ -86,6 +86,11 @@ size_t sepal_full_dim(sepal_vecstore_t *vs, rec_ref_t ref);
 /** Number of vectors in the store. */
 size_t sepal_n(const sepal_vecstore_t *vs);
 
+/** Consistency check of the internal search index (T2): 0 when the flat
+ *  sketch table, its refs, and the store's count agree; nonzero otherwise.
+ *  NULL store is valid (returns 0). Cheap; meant for tests and diagnostics. */
+int sepal_index_validate(const sepal_vecstore_t *vs);
+
 /* ---------------------------------------------------------------------.
  *  Math helpers                                                        */
 

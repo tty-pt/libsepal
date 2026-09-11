@@ -15,6 +15,11 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <xxhash.h>
+
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
 
 /* ----------------------------------------------------------------------.
  * VEC1 blob (also see sepal.h): 16 + 8W + 4*dim bytes, little-endian.      */
@@ -25,6 +30,8 @@
 #define BLOB_MAGIC3 '1'
 #define BLOB_VERSION 1
 #define BLOB_HDR_LEN 16
+
+static void sepal_sketch_words(const float *v, size_t n, uint64_t *words);
 
 static uint16_t
 be16_r(const uint8_t *b)
@@ -136,15 +143,7 @@ sepal_blob_put(uint8_t *buf, size_t avail, const float *v,
 	memcpy(buf + 12, &norm, sizeof(norm));
 
 	uint64_t *sk = (uint64_t *)(void *)(buf + BLOB_HDR_LEN);
-	for (size_t wi = 0; wi < w; wi++) {
-		uint64_t word = 0;
-		size_t base = wi * 64;
-		size_t hi = base + 64 < full_dim ? base + 64 : full_dim;
-		for (size_t i = base; i < hi; i++)
-			if (__builtin_signbit(v[i]))
-				word |= 1ULL << (i - base);
-		sk[wi] = word;
-	}
+	sepal_sketch_words(v, full_dim, sk);
 
 	float *fs = (float *)(void *)(buf + BLOB_HDR_LEN + 8 * w);
 	for (size_t i = 0; i < dim; i++)
@@ -157,11 +156,213 @@ sepal_blob_put(uint8_t *buf, size_t avail, const float *v,
 
 struct sepal_vecstore {
 	uint32_t hd;
-	size_t   n;
+	size_t   n;       /* entry count (restored on open, maintained) */
+	size_t   idx_n;   /* rows in the flat search index (== n while enabled) */
+	size_t   cap;     /* flat-index row capacity */
+	size_t   store_w; /* u64 words per flat row */
+	rec_ref_t *idx_ref;
+	uint64_t *idx_sk;
+	uint8_t  *idx_w;  /* per-row stored word count */
+	int      idx_valid; /* 1 = index mirrors the map; 0 = disabled (fallback) */
+	uint64_t *hkey;   /* open-addressing slot map: ref -> row */
+	uint32_t *hval;
+	uint8_t  *hused;
+	size_t   hmcap;
 };
 
 static uint32_t sepal_kt = QM_MISS;
 static uint32_t sepal_vt = QM_MISS;
+
+/* ---------- flat index: ref->row slot map (XXH32 keyed like qmap) ------ */
+
+#define SLOT_SEED 0xD15EA5E1U
+
+static uint32_t
+ref_hash(uint64_t x)
+{
+	return XXH32(&x, sizeof(x), SLOT_SEED);
+}
+
+static void
+slot_free(sepal_vecstore_t *vs)
+{
+	free(vs->hkey);
+	free(vs->hval);
+	free(vs->hused);
+	vs->hkey = NULL;
+	vs->hval = NULL;
+	vs->hused = NULL;
+	vs->hmcap = 0;
+}
+
+static int
+slot_grow(sepal_vecstore_t *vs)
+{
+	size_t ncap = vs->hmcap ? vs->hmcap * 2 : 16;
+	uint64_t *nk = calloc(ncap, sizeof(*nk));
+	uint32_t *nv = malloc(ncap * sizeof(*nv));
+	uint8_t  *nu = calloc(ncap, sizeof(*nu));
+	if (!nk || !nv || !nu) {
+		free(nk); free(nv); free(nu);
+		return -1;
+	}
+	size_t ocap = vs->hmcap;
+	for (size_t i = 0; i < ocap; i++) {
+		if (!vs->hused[i])
+			continue;
+		size_t j = ref_hash(vs->hkey[i]) & (ncap - 1);
+		while (nu[j])
+			j = (j + 1) & (ncap - 1);
+		nk[j] = vs->hkey[i];
+		nv[j] = vs->hval[i];
+		nu[j] = 1;
+	}
+	slot_free(vs);
+	vs->hkey = nk; vs->hval = nv; vs->hused = nu; vs->hmcap = ncap;
+	return 0;
+}
+
+/* Insert or update (ref -> row). Returns 0 ok, -1 on allocation failure. */
+static int
+slot_put(sepal_vecstore_t *vs, rec_ref_t ref, uint32_t row)
+{
+	if (!vs->hused) {
+		vs->hmcap = 0;
+		if (slot_grow(vs) != 0)
+			return -1;
+	}
+	size_t i = ref_hash(ref) & (vs->hmcap - 1);
+	for (;;) {
+		if (!vs->hused[i]) {
+			vs->hkey[i] = ref;
+			vs->hval[i] = row;
+			vs->hused[i] = 1;
+			return 0;
+		}
+		if (vs->hkey[i] == ref) {
+			vs->hval[i] = row;
+			return 0;
+		}
+		i = (i + 1) & (vs->hmcap - 1);
+		if (i == (ref_hash(ref) & (vs->hmcap - 1)))
+			break; /* table full */
+	}
+	if (slot_grow(vs) != 0)
+		return -1;
+	return slot_put(vs, ref, row);
+}
+
+static int
+slot_find(const sepal_vecstore_t *vs, rec_ref_t ref, uint32_t *row)
+{
+	if (!vs->hused)
+		return 0;
+	size_t i = ref_hash(ref) & (vs->hmcap - 1);
+	for (;;) {
+		if (!vs->hused[i])
+			return 0;
+		if (vs->hkey[i] == ref) {
+			if (row)
+				*row = vs->hval[i];
+			return 1;
+		}
+		i = (i + 1) & (vs->hmcap - 1);
+		if (i == (ref_hash(ref) & (vs->hmcap - 1)))
+			return 0;
+	}
+}
+
+/* Rebuild ref->row from the flat rows (after a swap-remove deletion). */
+static int
+slot_rebuild(sepal_vecstore_t *vs)
+{
+	slot_free(vs);
+	for (size_t i = 0; i < vs->idx_n; i++)
+		if (slot_put(vs, vs->idx_ref[i], (uint32_t)i) != 0)
+			return -1;
+	return 0;
+}
+
+/* ---------- flat index: row arrays ---------- */
+
+static void
+idx_free(sepal_vecstore_t *vs)
+{
+	free(vs->idx_ref);  vs->idx_ref = NULL;
+	free(vs->idx_sk);   vs->idx_sk = NULL;
+	free(vs->idx_w);    vs->idx_w = NULL;
+	vs->idx_n = 0;
+	vs->cap = 0;
+	vs->store_w = 0;
+	slot_free(vs);
+}
+
+static int
+idx_ensure(sepal_vecstore_t *vs, size_t need)
+{
+	if (need <= vs->cap)
+		return 0;
+	size_t ncap = vs->cap ? vs->cap : 64;
+	while (ncap < need)
+		ncap += ncap;
+	rec_ref_t *nr = realloc(vs->idx_ref, ncap * sizeof(*nr));
+	uint64_t *ns = NULL;
+	if (vs->store_w > 0)
+		ns = realloc(vs->idx_sk, ncap * vs->store_w * sizeof(*ns));
+	uint8_t *nw = realloc(vs->idx_w, ncap);
+	if (!nr || (vs->store_w > 0 && !ns) || !nw) {
+		free(nr); free(ns); free(nw);
+		return -1;
+	}
+	vs->idx_ref = nr;
+	vs->idx_sk = ns;
+	vs->idx_w = nw;
+	vs->cap = ncap;
+	return 0;
+}
+
+/* Grow the row stride (rare: a put with a larger dim); rewrites rows. */
+static int
+idx_resize_words(sepal_vecstore_t *vs, size_t new_w)
+{
+	if (new_w <= vs->store_w)
+		return 0;
+	if (vs->store_w > 0 && vs->idx_n > 0) {
+		uint64_t *nsk = calloc(vs->cap, new_w * sizeof(*nsk));
+		if (!nsk)
+			return -1;
+		for (size_t i = 0; i < vs->idx_n; i++)
+			for (size_t j = 0; j < vs->idx_w[i] && j < vs->store_w; j++)
+				nsk[i * new_w + j] = vs->idx_sk[i * vs->store_w + j];
+		free(vs->idx_sk);
+		vs->idx_sk = nsk;
+	} else {
+		vs->idx_sk = calloc(vs->cap, new_w * sizeof(*vs->idx_sk));
+		if (!vs->idx_sk)
+			return -1;
+	}
+	vs->store_w = new_w;
+	return 0;
+}
+
+/* Append a parsed blob's row. Blob must have passed blob_parse already. */
+static int
+idx_embed(sepal_vecstore_t *vs, rec_ref_t ref, const uint8_t *blob,
+          const sepal_blob_hdr_t *h)
+{
+	if (idx_ensure(vs, vs->idx_n + 1) != 0)
+		return -1;
+	if (idx_resize_words(vs, h->sketch_words) != 0)
+		return -1;
+	size_t row = vs->idx_n;
+	const uint64_t *sk = (const uint64_t *)(const void *)(blob + BLOB_HDR_LEN);
+	for (size_t j = 0; j < h->sketch_words; j++)
+		vs->idx_sk[row * vs->store_w + j] = sk[j];
+	vs->idx_ref[row] = ref;
+	vs->idx_w[row] = (uint8_t)h->sketch_words;
+	vs->idx_n++;
+	return slot_put(vs, ref, (uint32_t)row);
+}
 
 static size_t
 blob_measure(const void *data)
@@ -200,13 +401,31 @@ sepal_open(const char *fname, int *err)
 		goto out;
 	}
 vs->hd = hd;
+vs->idx_valid = 1;
 
-/* an existing file already holds entries: restore the count */
+/* an existing file already holds entries: restore the count and mirror
+ * every valid blob into the flat search index (atomicity: any unparsable
+ * row disables the index → searches fall back to the map walk) */
 {
 	uint32_t cur = qmap_iter(hd, NULL, 0);
 	const void *k, *v;
-	while (qmap_next(&k, &v, cur))
+	while (qmap_next(&k, &v, cur)) {
+		sepal_blob_hdr_t h;
 		vs->n++;
+		if (!vs->idx_valid)
+			continue;
+		if (blob_parse(v, (size_t)1 << 30, &h) != 0) {
+			idx_free(vs);
+			vs->idx_valid = 0;
+			continue;
+		}
+		rec_ref_t ref;
+		memcpy(&ref, k, sizeof(ref));
+		if (idx_embed(vs, ref, v, &h) != 0) {
+			idx_free(vs);
+			vs->idx_valid = 0;
+		}
+	}
 	qmap_fin(cur);
 }
 out:
@@ -220,6 +439,7 @@ sepal_close(sepal_vecstore_t *vs)
 {
 	if (!vs)
 		return;
+	idx_free(vs);
 	qmap_save();   /* persist; never qmap_close (truncates the file to 0) */
 	free(vs);
 }
@@ -247,11 +467,42 @@ sepal_put(sepal_vecstore_t *vs, rec_ref_t ref, const float *v, size_t full_dim)
 	 * too, since a put can land on position 0 legitimately. Presence is
 	 * verified below instead. */
 	qmap_put(vs->hd, &ref, buf);
-	free(buf);
-	if (qmap_count(vs->hd, &ref) == 0)
+	if (qmap_count(vs->hd, &ref) == 0) {
+		free(buf);
 		return -1;
+	}
 	if (!was_present)
 		vs->n++;
+
+	/* Flat index (T2): replace updates the row in place; new refs append. */
+	if (vs->idx_valid) {
+		sepal_blob_hdr_t h;
+		if (blob_parse(buf, len, &h) == 0) {
+			uint32_t row;
+			if (was_present && slot_find(vs, ref, &row)) {
+				const uint64_t *sk = (const uint64_t *)(const void *)
+					(buf + BLOB_HDR_LEN);
+				if (idx_resize_words(vs, h.sketch_words) != 0) {
+					free(buf);
+					vs->idx_valid = 0;
+					return 0;
+				}
+				for (size_t j = 0; j < h.sketch_words; j++)
+					vs->idx_sk[row * vs->store_w + j] = sk[j];
+				vs->idx_w[row] = (uint8_t)h.sketch_words;
+			} else if (!was_present) {
+				if (idx_embed(vs, ref, buf, &h) != 0) {
+					vs->idx_valid = 0;
+				}
+			} else {
+				/* index lost the ref (shouldn't happen) — disable */
+				vs->idx_valid = 0;
+			}
+		} else {
+			vs->idx_valid = 0;
+		}
+	}
+	free(buf);
 	return 0;
 }
 
@@ -264,6 +515,25 @@ sepal_del(sepal_vecstore_t *vs, rec_ref_t ref)
 		return -1;
 	qmap_del(vs->hd, &ref);
 	vs->n--;
+	if (vs->idx_valid) {
+		uint32_t row;
+		if (!slot_find(vs, ref, &row)) {
+			vs->idx_valid = 0;          /* index lost sync — disable */
+			return 0;
+		}
+		size_t last = vs->idx_n - 1;
+		if (row != last) {              /* swap-remove the row */
+			vs->idx_ref[row] = vs->idx_ref[last];
+			vs->idx_w[row] = vs->idx_w[last];
+			for (size_t j = 0; j < vs->store_w; j++)
+				vs->idx_sk[row * vs->store_w + j] =
+					vs->idx_sk[last * vs->store_w + j];
+		}
+		vs->idx_n--;
+		/* slot map is rare-path rebuilt from the surviving rows */
+		if (slot_rebuild(vs) != 0)
+			vs->idx_valid = 0;
+	}
 	return 0;
 }
 
@@ -313,6 +583,40 @@ sepal_n(const sepal_vecstore_t *vs)
 	return vs ? vs->n : 0;
 }
 
+int
+sepal_index_validate(const sepal_vecstore_t *vs)
+{
+	if (!vs)
+		return 0;
+	if (!vs->idx_valid)
+		return 0;                 /* index disabled — map scan is authoritative */
+	if (vs->n != vs->idx_n)
+		return 1;
+	if (vs->idx_n > 0 &&
+	    (!vs->idx_ref || !vs->idx_sk || !vs->idx_w || vs->cap < vs->idx_n ||
+	     vs->store_w == 0))
+		return 1;
+	for (size_t i = 0; i < vs->idx_n; i++) {
+		if (vs->idx_w[i] < 1 || vs->idx_w[i] > vs->store_w ||
+		    vs->idx_w[i] > SEPAL_VEC_MAX / 64)
+			return 1;
+	}
+	if (vs->hused) {
+		size_t used = 0;
+		for (size_t i = 0; i < vs->hmcap; i++) {
+			if (!vs->hused[i])
+				continue;
+			used++;
+			if (vs->hval[i] >= vs->idx_n ||
+			    vs->idx_ref[vs->hval[i]] != vs->hkey[i])
+				return 1;
+		}
+		if (used != vs->idx_n)
+			return 1;
+	}
+	return 0;
+}
+
 /* ----------------------------------------------------------------------.
  * Math                                                                */
 
@@ -330,14 +634,94 @@ sepal_cosine(const float *a, const float *b, size_t n)
 	return (float)(dot / sqrt(na * nb));
 }
 
-int
-sepal_sketch(const float *v, size_t n, uint64_t *words, size_t nwords)
+#ifdef __AVX2__
+/* AVX2 popcount via 2x nibble lookup table (reads 4 u64 in bounds). */
+static uint64_t
+sepal_popcnt_u64x4(const uint64_t *q, const uint64_t *sk)
 {
-	if (!v || !words || n < 1 || n > SEPAL_VEC_MAX)
-		return -1;
+	__m256i lookup = _mm256_setr_epi8(
+		0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4,
+		0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4);
+	__m256i low = _mm256_set1_epi8(0x0f);
+	__m256i x = _mm256_xor_si256(
+		_mm256_loadu_si256((const __m256i *)q),
+		_mm256_loadu_si256((const __m256i *)sk));
+	__m256i lo = _mm256_and_si256(x, low);
+	__m256i hi = _mm256_and_si256(_mm256_srli_epi16(x, 4), low);
+	__m256i cnt = _mm256_add_epi8(
+		_mm256_shuffle_epi8(lookup, lo),
+		_mm256_shuffle_epi8(lookup, hi));
+	__m128i lo16 = _mm256_castsi256_si128(cnt);
+	__m128i hi16 = _mm256_extracti128_si256(cnt, 1);
+	__m128i sum16 = _mm_add_epi8(lo16, hi16);
+	__m128i sum32 = _mm_sad_epu8(sum16, _mm_setzero_si128());
+	return (uint64_t)(_mm_cvtsi128_si64(sum32) + _mm_extract_epi64(sum32, 1));
+}
+
+/* Hamming distance over n words: 4-word AVX2 groups + scalar tail. Only
+ * touches [0, n) — safe on the flat index's last (partial) row. */
+static uint64_t
+sepal_popcnt_range(const uint64_t *q, const uint64_t *sk, size_t n)
+{
+	uint64_t sum = 0;
+	size_t i = 0;
+	for (; i + 4 <= n; i += 4)
+		sum += sepal_popcnt_u64x4(q + i, sk + i);
+	for (; i < n; i++)
+		sum += (uint64_t)__builtin_popcountll(q[i] ^ sk[i]);
+	return sum;
+}
+
+/* Sign-bit sketch words over v[0..n): AVX2 movemask, 64 floats per full
+ * word; the tail word (< 64 dims) is scalar so reads never pass n. */
+static void
+sepal_sketch_words(const float *v, size_t n, uint64_t *words)
+{
+	size_t full = n / 64;
+	for (size_t wi = 0; wi < full; wi++) {
+		const float *p = v + wi * 64;
+		__m256i m0  = _mm256_castps_si256(_mm256_loadu_ps(p));
+		__m256i m4  = _mm256_castps_si256(_mm256_loadu_ps(p + 8));
+		__m256i m8  = _mm256_castps_si256(_mm256_loadu_ps(p + 16));
+		__m256i m12 = _mm256_castps_si256(_mm256_loadu_ps(p + 24));
+		__m256i m16 = _mm256_castps_si256(_mm256_loadu_ps(p + 32));
+		__m256i m20 = _mm256_castps_si256(_mm256_loadu_ps(p + 40));
+		__m256i m24 = _mm256_castps_si256(_mm256_loadu_ps(p + 48));
+		__m256i m28 = _mm256_castps_si256(_mm256_loadu_ps(p + 56));
+		words[wi] =
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m0) |
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m4) << 8 |
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m8) << 16 |
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m12) << 24 |
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m16) << 32 |
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m20) << 40 |
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m24) << 48 |
+			(uint64_t)(uint32_t)_mm256_movemask_ps((__m256)m28) << 56;
+	}
+	size_t rem = n % 64;
+	if (rem) {
+		const float *p = v + full * 64;
+		uint64_t word = 0;
+		for (size_t i = 0; i < rem; i++)
+			if (__builtin_signbit(p[i]))
+				word |= 1ULL << i;
+		words[full] = word;
+	}
+}
+#else /* !__AVX2__ */
+static uint64_t
+sepal_popcnt_range(const uint64_t *q, const uint64_t *sk, size_t n)
+{
+	uint64_t sum = 0;
+	for (size_t i = 0; i < n; i++)
+		sum += (uint64_t)__builtin_popcountll(q[i] ^ sk[i]);
+	return sum;
+}
+
+static void
+sepal_sketch_words(const float *v, size_t n, uint64_t *words)
+{
 	size_t need = (n + 63) / 64;
-	if (nwords < need)
-		return -1;
 	for (size_t wi = 0; wi < need; wi++) {
 		uint64_t word = 0;
 		size_t base = wi * 64;
@@ -347,11 +731,56 @@ sepal_sketch(const float *v, size_t n, uint64_t *words, size_t nwords)
 				word |= 1ULL << (i - base);
 		words[wi] = word;
 	}
+}
+#endif /* __AVX2__ */
+
+int
+sepal_sketch(const float *v, size_t n, uint64_t *words, size_t nwords)
+{
+	if (!v || !words || n < 1 || n > SEPAL_VEC_MAX)
+		return -1;
+	size_t need = (n + 63) / 64;
+	if (nwords < need)
+		return -1;
+	sepal_sketch_words(v, n, words);
 	return 0;
 }
 
 /* ----------------------------------------------------------------------.
  * Two-stage search                                                       */
+
+/* Frozen-norm rerank score: cos(q, bf[0..d)) from a single fused dot pass
+ * using norms frozen at put (the blob header) and a query prefix norm —
+ * semantically equal to sepal_cosine within float rounding (D1), while
+ * cutting stage-2 to one pass over the stored floats. */
+static float
+rerank_score(const float *q, const float *bf, size_t d, float qnorm_d,
+             float stored_norm)
+{
+	double dot = 0.0;
+	for (size_t i = 0; i < d; i++)
+		dot += (double)q[i] * (double)bf[i];
+	if (qnorm_d <= 0.0f || stored_norm <= 0.0f)
+		return 0.0f;
+	return (float)(dot / ((double)qnorm_d * (double)stored_norm));
+}
+
+/* Single-candidate variant used by sepal_rank: dot and the query prefix
+ * norm share one pass over d (nothing extra vs sepal_cosine's fused pass —
+ * nb is the frozen blob norm). */
+static float
+rerank_score_fused(const float *q, const float *bf, size_t d, float stored_norm)
+{
+	double dot = 0.0, qacc = 0.0;
+	for (size_t i = 0; i < d; i++) {
+		dot += (double)q[i] * (double)bf[i];
+		qacc += (double)q[i] * (double)q[i];
+	}
+	float qn = (float)sqrt(qacc);
+	if (qn <= 0.0f || stored_norm <= 0.0f)
+		return 0.0f;
+	return (float)(dot / ((double)qn * (double)stored_norm));
+}
 
 /* Max-heap of the m best (smallest-hamming) candidates; root = worst. */
 typedef struct {
@@ -402,8 +831,11 @@ heap_push(cand_heap_t *hp, uint32_t h, rec_ref_t r)
 	}
 }
 
-/* Scan the store's blobs, keeping the m smallest Hamming refs. Returns 0 ok,
- * -1 on allocation failure. */
+/* Scan the store, keeping the m smallest Hamming refs. Returns 0 ok,
+ * -1 on allocation failure. T2: when the flat index is enabled the walk is
+ * a tight linear scan of contiguous sketch rows (L2/L3-resident); otherwise
+ * it falls back to the blob-map walk (kept for files whose rows fail parse
+ * or when the index lost sync). Either way the candidate SET is identical. */
 static int
 prefilter(sepal_vecstore_t *vs, const float *q, size_t qdim,
           cand_heap_t *hp)
@@ -413,23 +845,31 @@ prefilter(sepal_vecstore_t *vs, const float *q, size_t qdim,
 	if (sepal_sketch(q, qdim, qw, wq) != 0)
 		return -1;
 
-	uint32_t cur = qmap_iter(vs->hd, NULL, 0);
-	const void *k, *v;
-	while (qmap_next(&k, &v, cur)) {
-		sepal_blob_hdr_t h;
-		if (blob_parse(v, (size_t)1 << 30, &h) != 0)
-			continue;
-		const uint64_t *sk = (const uint64_t *)(const void *)
-			((const uint8_t *)v + BLOB_HDR_LEN);
-		size_t words = wq < h.sketch_words ? wq : h.sketch_words;
-		uint64_t hd = 0;
-		for (size_t i = 0; i < words; i++)
-			hd += (uint64_t)__builtin_popcountll(qw[i] ^ sk[i]);
-		rec_ref_t ref;
-		memcpy(&ref, k, sizeof(ref));
-		heap_push(hp, (uint32_t)hd, ref);
+	if (!vs->idx_valid) {
+		uint32_t cur = qmap_iter(vs->hd, NULL, 0);
+		const void *k, *v;
+		while (qmap_next(&k, &v, cur)) {
+			sepal_blob_hdr_t h;
+			if (blob_parse(v, (size_t)1 << 30, &h) != 0)
+				continue;
+			const uint64_t *sk = (const uint64_t *)(const void *)
+				((const uint8_t *)v + BLOB_HDR_LEN);
+			size_t words = wq < h.sketch_words ? wq : h.sketch_words;
+			uint64_t hd = sepal_popcnt_range(qw, sk, words);
+			rec_ref_t ref;
+			memcpy(&ref, k, sizeof(ref));
+			heap_push(hp, (uint32_t)hd, ref);
+		}
+		qmap_fin(cur);
+		return 0;
 	}
-	qmap_fin(cur);
+
+	for (size_t row = 0; row < vs->idx_n; row++) {
+		const uint64_t *sk = vs->idx_sk + (size_t)row * vs->store_w;
+		size_t words = wq < vs->idx_w[row] ? wq : vs->idx_w[row];
+		uint64_t hd = sepal_popcnt_range(qw, sk, words);
+		heap_push(hp, (uint32_t)hd, vs->idx_ref[row]);
+	}
 	return 0;
 }
 
@@ -463,12 +903,23 @@ sepal_search(sepal_vecstore_t *vs, const float *q, size_t qdim,
 		free(hp.a);
 		return 0;
 	}
+	/* query prefix norms (double, archived to float) over the exact-stage
+	 * dims — built once, indexed by each candidate's stored dim */
+	size_t pq = qdim < SEPAL_EXACT_DIM ? qdim : SEPAL_EXACT_DIM;
+	float qn[SEPAL_EXACT_DIM + 1];
+	double qacc = 0.0;
+	qn[0] = 0.0f;
+	for (size_t i = 0; i < pq; i++) {
+		qacc += (double)q[i] * (double)q[i];
+		qn[i + 1] = (float)sqrt(qacc);
+	}
 	for (size_t i = 0; i < hp.n; i++) {
 		sepal_blob_hdr_t h;
 		const uint8_t *b = lookup_blob(vs, hp.a[i].r, &h);
 		if (!b || h.dim > qdim)
 			continue;
-		float sc = sepal_cosine(q, blob_floats(b), h.dim);
+		float sc = rerank_score(q, blob_floats(b), h.dim, qn[h.dim],
+		                        h.norm);
 		rec_rank_push(rk, hp.a[i].r, sc);
 	}
 	free(hp.a);
@@ -537,7 +988,7 @@ sepal_rank(struct sepal_rank_ctx *ctx, rec_ref_t ref, float *score)
 	const uint8_t *b = lookup_blob(ctx->vs, ref, &h);
 	if (!b || h.dim > ctx->qdim)
 		return -1;
-	float s = sepal_cosine(ctx->q, blob_floats(b), h.dim);
+	float s = rerank_score_fused(ctx->q, blob_floats(b), h.dim, h.norm);
 	if (s < ctx->min_sim)
 		return -1;
 	*score = s;
