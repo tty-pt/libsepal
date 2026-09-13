@@ -58,8 +58,8 @@ main(void)
 	float scs[5];
 	size_t n = rec_rank_sorted(rk, out, scs);
 	for (size_t i = 0; i < n; i++)
-		printf("  ref=%llu cosine=%.4f\n",
-		       (unsigned long long)out[i], scs[i]);
+		printf("  ref=%u cosine=%.4f\n",
+		       out[i], scs[i]);
 
 	rec_rank_free(rk);
 	rec_set_free(exact);

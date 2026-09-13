@@ -65,7 +65,7 @@ test_reput_replaces(void)
 static void
 test_opaque_refs(void)
 {
-	printf("=== vecstore: refs are opaque u64 ===\n");
+	printf("=== vecstore: refs are opaque u32 ===\n");
 	sepal_vecstore_t *vs = sepal_open(NULL, NULL);
 	ASSERT_NOT_NULL(vs);
 
@@ -73,14 +73,14 @@ test_opaque_refs(void)
 	sepal_rng_t r = { 23 };
 	rng_unit_vector(&r, v, 32);
 
-	rec_ref_t refs[] = { 0, 1, 0xFFFFULL, 1ULL << 63, (rec_ref_t)-1 };
+	rec_ref_t refs[] = { 0, 1, 0xFFFF, 0x7FFFFFFF, UINT32_MAX };
 	for (size_t i = 0; i < sizeof(refs) / sizeof(refs[0]); i++)
 		ASSERT_EQ(sepal_put(vs, refs[i], v, 32), 0);
 	ASSERT_EQ(sepal_n(vs), 5);
 
 	float out[CHK_CAP];
-	ASSERT_EQ(sepal_get(vs, 1ULL << 63, out, CHK_CAP), 32);
-	ASSERT_EQ(sepal_get(vs, (rec_ref_t)-1, out, CHK_CAP), 32);
+	ASSERT_EQ(sepal_get(vs, 0x7FFFFFFF, out, CHK_CAP), 32);
+	ASSERT_EQ(sepal_get(vs, UINT32_MAX, out, CHK_CAP), 32);
 	ASSERT_EQ(sepal_get(vs, 0, out, CHK_CAP), 32);
 	sepal_close(vs);
 }

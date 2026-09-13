@@ -7,7 +7,7 @@
  * same standard as libit / libgeo / libstoma (mk stack, ttypt headers).
  *
  * DESIGN CONTRACT
- *  - Refs are caller-opaque rec_ref_t (u64): the caller passes them at put
+ *  - Refs are caller-opaque rec_ref_t (u32): the caller passes them at put
  *    time and owns ref<->schema mapping. The store never maps refs.
  *  - Per-blob dims: every vector stores its own exact-stage dim (the
  *    "matryoshka" prefix) = min(full_dim, SEPAL_EXACT_DIM). Vectors already
@@ -61,7 +61,7 @@ sepal_vecstore_t *sepal_open(const char *fname, int *err);
 void              sepal_close(sepal_vecstore_t *vs);
 
 /*
- * rec_axis_open (PLAN-REC-QUERY.md §4.3, optional CLI-open convention,
+ * rec_axis_open (RECALL-KERNEL.md "rec_axis_open convention", optional CLI-open convention,
  * not part of libqmap's core rec_query registry API): opens a sepal
  * store from an opaque spec string (the sepal_open() fname, or
  * empty/NULL for a memory-only store) and returns the ctx a caller then

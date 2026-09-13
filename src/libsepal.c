@@ -1126,7 +1126,7 @@ __attribute__((constructor)) static void sepal_rec_axis_init(void)
 }
 
 /*
- * rec_axis_open convention (PLAN-REC-QUERY.md §4.3, optional CLI-open
+ * rec_axis_open convention (RECALL-KERNEL.md "rec_axis_open convention", optional CLI-open
  * convention, not part of libqmap's core rec_query registry API): spec
  * is the sepal_open() fname, or empty/NULL for a memory-only store.
  * Returns the sepal_vecstore_t* ctx directly (no cast needed, unlike

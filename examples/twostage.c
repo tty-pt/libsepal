@@ -42,8 +42,8 @@ main(void)
 	for (size_t i = 0; i < rec_set_count(cands); i++) {
 		float sc;
 		if (sepal_rank(&ctx, refs[i], &sc) == 0)
-			printf("  ref=%llu cosine=%.4f\n",
-			       (unsigned long long)refs[i], sc);
+			printf("  ref=%u cosine=%.4f\n",
+			       refs[i], sc);
 	}
 	rec_set_free(cands);
 
@@ -52,8 +52,8 @@ main(void)
 	size_t n = sepal_search(vs, q, 128, 5, -2.0f, 10, hits);
 	printf("top-%zu via sepal_search:\n", n);
 	for (size_t i = 0; i < n; i++)
-		printf("  ref=%llu cosine=%.4f\n",
-		       (unsigned long long)hits[i].ref, hits[i].score);
+		printf("  ref=%u cosine=%.4f\n",
+		       hits[i].ref, hits[i].score);
 
 	sepal_close(vs);
 	return 0;

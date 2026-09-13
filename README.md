@@ -32,7 +32,7 @@ fill declares its approximate-ness so downstream recall stays honest.
 - **AVX2 fast path**: sign-bit sketch via `vmovmskps`; Hamming prefilter
   via 256-bit XOR→nibble-LUT popcount; cosine loops auto-vectorized with
   FMA; scalar fallback retained for non-AVX2 targets
-- **Caller-opaque refs**: refs are `rec_ref_t` (u64) passed at put time;
+- **Caller-opaque refs**: refs are `rec_ref_t` (u32) passed at put time;
   the store never maps refs to schemas
 
 ## Quick Start
@@ -47,8 +47,8 @@ float q[4] = { 0.9f, 0.1f, 0.0f, 0.0f };
 sepal_hit_t hits[2];
 size_t n = sepal_search(vs, q, 4, 2, 0.0f, 0, hits);  /* m=0 → 10×k */
 for (size_t i = 0; i < n; i++)
-    printf("ref=%llu score=%.4f\n",
-           (unsigned long long)hits[i].ref, hits[i].score);
+    printf("ref=%u score=%.4f\n",
+           hits[i].ref, hits[i].score);
 sepal_close(vs);
 ```
 

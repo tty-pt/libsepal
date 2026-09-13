@@ -27,8 +27,8 @@ main(void)
 	sepal_hit_t hits[2];
 	size_t n = sepal_search(vs, q, 4, 2, 0.0f, 0, hits);
 	for (size_t i = 0; i < n; i++)
-		printf("hit ref=%llu score=%.4f\n",
-		       (unsigned long long)hits[i].ref, hits[i].score);
+		printf("hit ref=%u score=%.4f\n",
+		       hits[i].ref, hits[i].score);
 
 	sepal_close(vs);
 	return 0;

@@ -14,3 +14,10 @@ test: all
 
 bench: all
 	$(MAKE) -C tests bench
+
+# tests/ has its own Makefile whose binaries are NOT covered by mk's clean,
+# and its build rules carry no header deps — so a header retype (u64->u32)
+# leaves stale-ABI test binaries behind that fail spuriously. Recurse.
+clean: clean-tests
+clean-tests:
+	$(MAKE) -C tests clean
