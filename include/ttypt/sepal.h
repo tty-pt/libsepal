@@ -4,7 +4,7 @@
  * A dim-tagged vector store with a two-stage ANN pipeline: Hamming prefilter
  * over a sign-bit sketch (top-m) followed by exact cosine rerank (top-k).
  * Built on the qmap persistent map and the recall kernel (rec.h). Follows the
- * same standard as libit / libgeo / libstoma (mk stack, ttypt headers).
+ * same standard as libjoint / libislet / libstoma (mk stack, ttypt headers).
  *
  * DESIGN CONTRACT
  *  - Refs are caller-opaque rec_ref_t (u32): the caller passes them at put
@@ -69,6 +69,65 @@ void              sepal_close(sepal_vecstore_t *vs);
  * on open failure.
  */
 void *rec_axis_open(const char *spec);
+
+/*
+ * rec_axis_env_config (RECALL-KERNEL.md "rec_axis_env_config convention",
+ * optional CLI-open convention — not libqmap core API): invoked by the
+ * qmap CLI once per bound plugin (after rec_axis_open/rec_axis_set_ctx).
+ * Configuration is env-only (D8): when BOTH QMAP_SEPAL_EMBED_URL and
+ * QMAP_SEPAL_EMBED_MODEL are set, configure the embedder from them
+ * (optional QMAP_SEPAL_EMBED_KEY); otherwise sepal stays unconfigured,
+ * exactly the offline floats-direct default. Credentials never touch
+ * spec/filespec/roster/disk — they exist only in the invoking env.
+ * Returns 0; a missing/unusable pair leaves sepal unconfigured (the
+ * store path then EINVALs loud — the read-only offline default).
+ */
+int rec_axis_env_config(void);
+
+/* ---------------------------------------------------------------------.
+ *  Embedder configuration (optional; Phase 2A store contract)
+ *
+ *  libcurl is dlopen'd lazily on the first string embed — there is NO
+ *  build-time or offline dependency on curl. To embed a string in
+ *  rec_axis_store the embedder must be configured first:
+ *
+ *      sepal_configure_embeddings("http://host:port/v1/embeddings",
+ *                                 "model-name", "api-key");
+ *
+ *  url = the full HTTP(S) embedding endpoint (OpenAI-compatible JSON:
+ *  POST {"input": ["<text>"], "model": "<model>"} with
+ *  "Authorization: Bearer <key>" and "Content-Type: application/json",
+ *  response {"data": [{"embedding": [f, ...]}]}).
+ *  model = the model name sent in the body.
+ *  api_key = bearer token (may be NULL for keyless local endpoints).
+ *  Passing all-NULL clears the configuration (string embeds then fail with
+ *  EINVAL again); model dims above SEPAL_VEC_MAX are rejected at embed time
+ *  with ERANGE. Returns 0 on success, -1 when arguments are inconsistent
+ *  (e.g. url set but model NULL). Errors from a configured-but-unreachable
+ *  endpoint are deferred to the first embed (curl) call, not configure time.
+ */
+int sepal_configure_embeddings(const char *url, const char *model,
+                               const char *api_key);
+
+/* ---------------------------------------------------------------------.
+ *  rec_axis_store / rec_axis_unstore / rec_axis_readback conventional
+ *  exports (RECALL-KERNEL.md / mm-plan PHASE-2-CLI.md §2A, optional
+ *  CLI-specific — not libqmap core API). The consumer passes (ref, value)
+ *  blindly; sepal parses the WHOLE value string in its own grammar:
+ *
+ *    "f1,f2,…"             comma floats (dim = token count, 1..SEPAL_VEC_MAX)
+ *                          -> sepal_put directly
+ *    anything else         -> embedded via the configured embedder (curl),
+ *                          or EINVAL when none is configured / curl missing
+ *  rec_axis_readback renders the stored vector back as comma floats (the
+ *  same grammar store consumes, so it round-trips via a fresh store call).
+ *  rec_axis_unstore is idempotent: unstore of an absent ref returns 0.     */
+
+int rec_axis_store(void *ctx, const char *spec, rec_ref_t ref,
+                   const char *value);
+int rec_axis_unstore(void *ctx, rec_ref_t ref);
+int rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out,
+                      size_t *n_out);
 
 /* ---------------------------------------------------------------------.
  *  Vectors (blobs)                                                     */

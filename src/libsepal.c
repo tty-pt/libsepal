@@ -12,6 +12,8 @@
 
 #include <ttypt/qmap.h>
 
+#include <dlfcn.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1137,4 +1139,508 @@ void *rec_axis_open(const char *spec)
 	int err;
 
 	return sepal_open(spec && *spec ? spec : NULL, &err);
+}
+
+/*
+ * rec_axis_env_config convention (RECALL-KERNEL.md "rec_axis_env_config
+ * convention", optional CLI-open — not libqmap core API): called by the
+ * qmap CLI once per bound plugin, right after rec_axis_set_ctx. Pure
+ * env configuration (D8) — QMAP_SEPAL_EMBED_URL + QMAP_SEPAL_EMBED_MODEL
+ * (both required) with optional QMAP_SEPAL_EMBED_KEY configure the
+ * embedder; anything else leaves sepal unconfigured (the offline
+ * floats-direct default). Credentials live only in the invoking env.
+ */
+int rec_axis_env_config(void)
+{
+	const char *url = getenv("QMAP_SEPAL_EMBED_URL");
+	const char *model = getenv("QMAP_SEPAL_EMBED_MODEL");
+	const char *key = getenv("QMAP_SEPAL_EMBED_KEY");
+
+	if (!url || !model)
+		return 0;               /* unconfigured: offline floats-direct */
+	if (sepal_configure_embeddings(url, model, key) != 0)
+		fprintf(stderr, "sepal: inconsistent QMAP_SEPAL_EMBED_* pair; "
+				"stays unconfigured\n");
+	return 0;
+}
+
+/* ----------------------------------------------------------------------.
+ * rec_axis_store / rec_axis_unstore / rec_axis_readback (Phase 2A
+ * store contract, RECALL-KERNEL.md "rec_axis_store convention", optional
+ * CLI-specific — not libqmap core API). The consumer passes (ref, value)
+ * blindly; sepal parses the WHOLE value string in its own grammar:
+ *   "f1,f2,…"  comma floats (dim = token count, 1..SEPAL_VEC_MAX) → direct
+ *   else       → embedded via the configured embedder, or EINVAL.      */
+
+/* Embedder config: sepal_configure_embeddings() sets it,
+ * rec_axis_store() consumes it. Cleared via all-NULL configure. */
+static struct sepal_embed_cfg {
+	char *url;
+	char *model;
+	char *key;
+} sepal_embed_cfg;
+
+int
+sepal_configure_embeddings(const char *url, const char *model,
+                           const char *api_key)
+{
+	char *nurl, *nmodel, *nkey;
+
+	if (!url && !model && !api_key) {
+		free(sepal_embed_cfg.url);
+		free(sepal_embed_cfg.model);
+		free(sepal_embed_cfg.key);
+		sepal_embed_cfg.url = sepal_embed_cfg.model =
+			sepal_embed_cfg.key = NULL;
+		return 0;
+	}
+	if (!url || !model)
+		return -1;                 /* inconsistent: url+model come together */
+	nurl = strdup(url);
+	nmodel = strdup(model);
+	nkey = api_key ? strdup(api_key) : NULL;
+	if (!nurl || !nmodel || (api_key && !nkey)) {
+		free(nurl); free(nmodel); free(nkey);
+		return -1;
+	}
+	free(sepal_embed_cfg.url);
+	free(sepal_embed_cfg.model);
+	free(sepal_embed_cfg.key);
+	sepal_embed_cfg.url = nurl;
+	sepal_embed_cfg.model = nmodel;
+	sepal_embed_cfg.key = nkey;
+	return 0;
+}
+
+/* Parse the whole string as comma-separated floats. Returns the count and
+ * a caller-freed vector, or -1 when the string is not a full float list
+ * (errno untouched). Overflow (> SEPAL_VEC_MAX) also returns -1 but sets
+ * *overflow = 1 so the caller rejects instead of falling to the embedder. */
+static int
+parse_comma_floats(const char *s, float **v_out, size_t *n_out, int *overflow)
+{
+	size_t cap = 8, n = 0;
+	float *v = malloc(cap * sizeof(*v));
+	const char *p = s;
+	char *end;
+
+	*v_out = NULL; *n_out = 0; *overflow = 0;
+	if (!v)
+		return -1;
+	for (;;) {
+		double d;
+		errno = 0;
+		d = strtod(p, &end);
+		if (end == p || errno == ERANGE) {   /* not a float at all */
+			free(v);
+			return -1;
+		}
+		if (n == cap) {
+			size_t ncap = cap * 2;
+			float *grown = realloc(v, ncap * sizeof(*v));
+			if (!grown) {
+				free(v);
+				return -1;
+			}
+			v = grown;
+			cap = ncap;
+		}
+		v[n++] = (float)d;
+		if (*end == '\0')
+			break;
+		if (*end != ',') {                  /* trailing junk past floats */
+			free(v);
+			return -1;
+		}
+		if (n > SEPAL_VEC_MAX) {
+			free(v);
+			*overflow = 1;
+			return -1;
+		}
+		p = end + 1;
+	}
+	if (n == 0 || n > SEPAL_VEC_MAX) {
+		free(v);
+		if (n > SEPAL_VEC_MAX)
+			*overflow = 1;
+		return -1;
+	}
+	*v_out = v;
+	*n_out = n;
+	return 0;
+}
+
+/* Render floats back as comma-separated text ("%.9g" round-trips float32).
+ * Caller frees. NULL on OOM. */
+static char *
+format_comma_floats(const float *v, size_t n)
+{
+	size_t i, cap = n * 15 + 16, used = 0;
+	char *s = malloc(cap);
+
+	if (!s)
+		return NULL;
+	for (i = 0; i < n; i++) {
+		int w = snprintf(s + used, cap - used, i ? ",%.9g" : "%.9g",
+		                 (double)v[i]);
+		if (w < 0 || (size_t)w >= cap - used) {
+			free(s);
+			return NULL;
+		}
+		used += (size_t)w;
+	}
+	return s;
+}
+
+/* Lazily-resolved libcurl symbols (dlopen'd on the first embed; there is
+ * NO build-time or offline dependency on curl). Only the symbols the
+ * embedder needs are resolved. Option/info values are the documented
+ * CURLoption/CURLINFO ABI numbers (no curl headers needed at build). */
+#define SE_CURLOPT_URL            10002
+#define SE_CURLOPT_POSTFIELDS     10015
+#define SE_CURLOPT_HTTPHEADER     10023
+#define SE_CURLOPT_WRITEFUNCTION  20011
+#define SE_CURLOPT_WRITEDATA      10001
+#define SE_CURLOPT_POST           47
+#define SE_CURLOPT_SSL_VERIFYPEER 64
+#define SE_CURLOPT_SSL_VERIFYHOST 81
+#define SE_CURLINFO_RESPONSE_CODE 0x200002
+
+struct sepal_curl_syms {
+	int   loaded;
+	void *(*easy_init)(void);
+	int   (*easy_setopt)(void *, int, ...);
+	int   (*easy_perform)(void *);
+	void  (*easy_cleanup)(void *);
+	int   (*easy_getinfo)(void *, int, ...);
+	void *(*slist_append)(void *, const char *);
+	void  (*slist_free_all)(void *);
+};
+
+static struct sepal_curl_syms sepal_curl;
+static void                  *sepal_curl_dl;
+
+static int
+sepal_curl_ensure(void)
+{
+	const char *names[] = { "libcurl.so.4", "libcurl.so", NULL };
+	size_t i;
+	void *sym;
+
+	if (sepal_curl.loaded)
+		return 0;
+	for (i = 0; names[i]; i++) {
+		sepal_curl_dl = dlopen(names[i], RTLD_LAZY);
+		if (sepal_curl_dl)
+			break;
+	}
+	if (!sepal_curl_dl)
+		return -1;
+	sym = dlsym(sepal_curl_dl, "curl_easy_init");
+	memcpy(&sepal_curl.easy_init, &sym, sizeof(sepal_curl.easy_init));
+	sym = dlsym(sepal_curl_dl, "curl_easy_setopt");
+	memcpy(&sepal_curl.easy_setopt, &sym, sizeof(sepal_curl.easy_setopt));
+	sym = dlsym(sepal_curl_dl, "curl_easy_perform");
+	memcpy(&sepal_curl.easy_perform, &sym, sizeof(sepal_curl.easy_perform));
+	sym = dlsym(sepal_curl_dl, "curl_easy_cleanup");
+	memcpy(&sepal_curl.easy_cleanup, &sym,
+	       sizeof(sepal_curl.easy_cleanup));
+	sym = dlsym(sepal_curl_dl, "curl_easy_getinfo");
+	memcpy(&sepal_curl.easy_getinfo, &sym,
+	       sizeof(sepal_curl.easy_getinfo));
+	sym = dlsym(sepal_curl_dl, "curl_slist_append");
+	memcpy(&sepal_curl.slist_append, &sym,
+	       sizeof(sepal_curl.slist_append));
+	sym = dlsym(sepal_curl_dl, "curl_slist_free_all");
+	memcpy(&sepal_curl.slist_free_all, &sym,
+	       sizeof(sepal_curl.slist_free_all));
+	if (!sepal_curl.easy_init || !sepal_curl.easy_setopt ||
+	    !sepal_curl.easy_perform || !sepal_curl.easy_cleanup ||
+	    !sepal_curl.easy_getinfo || !sepal_curl.slist_append ||
+	    !sepal_curl.slist_free_all)
+		return -1;
+	sepal_curl.loaded = 1;
+	return 0;
+}
+
+/* Minimal response sink for the embed POST. */
+struct sepal_resp {
+	char  *p;
+	size_t n, cap;
+};
+
+static size_t
+sepal_resp_write(char *ptr, size_t size, size_t nmemb, void *ud)
+{
+	struct sepal_resp *r = ud;
+	size_t add = size * nmemb, ncap;
+
+	if (r->n + add + 1 < r->n)
+		return 0;
+	if (r->n + add + 1 > r->cap) {
+		char *grown;
+		ncap = r->cap ? r->cap * 2 : 4096;
+		while (ncap < r->n + add + 1)
+			ncap *= 2;
+		grown = realloc(r->p, ncap);
+		if (!grown)
+			return 0;
+		r->p = grown;
+		r->cap = ncap;
+	}
+	memcpy(r->p + r->n, ptr, add);
+	r->n += add;
+	r->p[r->n] = '\0';
+	return add;
+}
+
+/* Extract the float list from an OpenAI-style embedding response:
+ * {"data":[{"embedding":[…]}]}. Returns a caller-freed vector, or NULL. */
+static float *
+sepal_parse_embedding(const char *body, size_t *n_out)
+{
+	const char *open, *p;
+	size_t cap = 64, n = 0;
+	float *v = malloc(cap * sizeof(*v));
+	char *end;
+
+	*n_out = 0;
+	if (!v)
+		return NULL;
+	open = strstr(body, "\"embedding\"");
+	if (!open) {
+		free(v);
+		return NULL;
+	}
+	p = strchr(open, '[');
+	if (!p) {
+		free(v);
+		return NULL;
+	}
+	p++;
+	for (;;) {
+		double d;
+		while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+			p++;
+		if (*p == ']')
+			break;
+		errno = 0;
+		d = strtod(p, &end);
+		if (end == p || errno == ERANGE) {
+			free(v);
+			return NULL;
+		}
+		if (n == cap) {
+			float *grown = realloc(v, cap * 2 * sizeof(*v));
+			if (!grown) {
+				free(v);
+				return NULL;
+			}
+			v = grown;
+			cap *= 2;
+		}
+		v[n++] = (float)d;
+		p = end;
+		while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+			p++;
+		if (*p == ',')
+			p++;
+		else if (*p != ']') {
+			free(v);
+			return NULL;
+		}
+	}
+	if (n == 0) {
+		free(v);
+		return NULL;
+	}
+	*n_out = n;
+	return v;
+}
+
+/* Build the embed request body (OpenAI-style). Caller frees. Escapes only
+ * the characters that would break quoting (" and \). */
+static char *
+sepal_embed_body(const char *model, const char *text)
+{
+	size_t ml = strlen(model), tl = strlen(text), i, cap, used;
+	char *b = malloc(ml + tl * 2 + 64);
+
+	if (!b)
+		return NULL;
+	used = (size_t)snprintf(b, ml + tl * 2 + 64,
+	                        "{\"model\":\"%s\",\"input\":\"", model);
+	for (i = 0; i < tl; i++) {
+		if (text[i] == '"' || text[i] == '\\')
+			b[used++] = '\\';
+		b[used++] = text[i];
+	}
+	b[used++] = '"';
+	b[used++] = '}';
+	b[used] = '\0';
+	cap = ml + tl * 2 + 64;
+	(void)cap;
+	return b;
+}
+
+/*
+ * Default string→vector fetch: curl POST to the configured endpoint.
+ * Weak so test binaries can override it with a canned-vector stub and keep
+ * the suite offline-green (executable symbols win over weak .so ones).
+ */
+__attribute__((weak)) int
+sepal_embed_fetch(const char *text, float **vec_out, size_t *n_out)
+{
+	char *body, autz[256];
+	void *curl, *hdrs = NULL;
+	struct sepal_resp resp = { NULL, 0, 0 };
+	void *json;
+	long code = 0;
+	float *v = NULL;
+	size_t n = 0;
+	int rc = -1;
+
+	*vec_out = NULL; *n_out = 0;
+	if (sepal_curl_ensure() != 0) {
+		errno = EINVAL;                      /* no curl → reject, loud */
+		return -1;
+	}
+	body = sepal_embed_body(sepal_embed_cfg.model, text);
+	if (!body)
+		return -1;
+	if (sepal_embed_cfg.key)
+		snprintf(autz, sizeof(autz), "Authorization: Bearer %s",
+		         sepal_embed_cfg.key);
+	else
+		autz[0] = '\0';
+	json = (void *)"Content-Type: application/json";
+	curl = sepal_curl.easy_init();
+	if (!curl) {
+		free(body);
+		return -1;
+	}
+	hdrs = sepal_curl.slist_append(NULL, (const char *)json);
+	if (autz[0])
+		hdrs = sepal_curl.slist_append(hdrs, autz);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_URL, sepal_embed_cfg.url);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_POST, 1L);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_POSTFIELDS, body);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_HTTPHEADER, hdrs);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_WRITEFUNCTION,
+	                       sepal_resp_write);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_WRITEDATA, &resp);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_SSL_VERIFYPEER, 1L);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_SSL_VERIFYHOST, 2L);
+	if (sepal_curl.easy_perform(curl) != 0)
+		goto out;
+	sepal_curl.easy_getinfo(curl, SE_CURLINFO_RESPONSE_CODE, &code);
+	if (code / 100 != 2)
+		goto out;
+	if (!resp.p)
+		goto out;
+	v = sepal_parse_embedding(resp.p, &n);
+	if (!v)
+		goto out;
+	if (n > SEPAL_VEC_MAX) {
+		free(v);
+		errno = ERANGE;
+		goto out;
+	}
+	*vec_out = v;
+	*n_out = n;
+	rc = 0;
+out:
+	sepal_curl.easy_cleanup(curl);
+	sepal_curl.slist_free_all(hdrs);
+	free(resp.p);
+	free(body);
+	return rc;
+}
+
+int
+rec_axis_store(void *ctx, const char *spec, rec_ref_t ref, const char *value)
+{
+	sepal_vecstore_t *vs = ctx;
+	float *v;
+	size_t n;
+	int overflow, r;
+
+	(void)spec;                                    /* reserved — NULL */
+	if (!vs || !value) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (!*value) {                               /* floats-first grammar */
+		errno = EINVAL;
+		return -1;
+	}
+	if (parse_comma_floats(value, &v, &n, &overflow) == 0) {
+		r = sepal_put(vs, ref, v, n);
+		free(v);
+		return r;
+	}
+	if (overflow) {                              /* floats but over cap */
+		errno = ERANGE;
+		return -1;
+	}
+	/* Not floats → embed the whole string iff configured, else loud. */
+	if (!sepal_embed_cfg.url) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (sepal_embed_fetch(value, &v, &n) != 0)
+		return -1;
+	r = sepal_put(vs, ref, v, n);
+	free(v);
+	return r;
+}
+
+int
+rec_axis_unstore(void *ctx, rec_ref_t ref)
+{
+	sepal_vecstore_t *vs = ctx;
+
+	if (!vs)
+		return -1;
+	if (sepal_del(vs, ref) == 0)
+		return 0;
+	/* sepal_del returns -1 only for absent: normalize to the idempotent 0. */
+	return sepal_dim(vs, ref) == 0 ? 0 : -1;
+}
+
+int
+rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out)
+{
+	sepal_vecstore_t *vs = ctx;
+	size_t dim;
+	float *vec;
+	size_t got;
+	char *s;
+
+	if (blob_out)
+		*blob_out = NULL;
+	if (n_out)
+		*n_out = 0;
+	if (!vs || !blob_out || !n_out) {
+		errno = EINVAL;
+		return -1;
+	}
+	dim = sepal_dim(vs, ref);
+	if (dim == 0)
+		return 0;                            /* absent → NULL/0, still 0 */
+	vec = malloc(dim * sizeof(*vec));
+	if (!vec)
+		return -1;
+	got = sepal_get(vs, ref, vec, dim);
+	if (got == 0) {                          /* ref appeared then vanished */
+		free(vec);
+		return 0;
+	}
+	s = format_comma_floats(vec, got);
+	free(vec);
+	if (!s)
+		return -1;
+	*blob_out = s;
+	*n_out = strlen(s);
+	return 0;
 }
