@@ -85,11 +85,14 @@ void *rec_axis_open(const char *spec);
 int rec_axis_env_config(void);
 
 /* ---------------------------------------------------------------------.
- *  Embedder configuration (optional; Phase 2A store contract)
+ *  Embedder configuration (optional; Phase 2A store contract + Phase 6
+ *  query-text contract)
  *
  *  libcurl is dlopen'd lazily on the first string embed — there is NO
- *  build-time or offline dependency on curl. To embed a string in
- *  rec_axis_store the embedder must be configured first:
+ *  build-time or offline dependency on curl. The embedder serves two
+ *  paths: rec_axis_store (whole value string) and the sepal query leaf
+ *  `query='…'` (sepal_axis_decode, server-side at query time). To embed
+ *  a string in either path the embedder must be configured first:
  *
  *      sepal_configure_embeddings("http://host:port/v1/embeddings",
  *                                 "model-name", "api-key");
@@ -179,7 +182,17 @@ int sepal_sketch(const float *v, size_t n, uint64_t *words, size_t nwords);
  *    stage 2: exact-cosine rerank of the m candidates, keep best-k above
  *             min_sim, ordered best-first, ties by ascending ref.
  *  qdim > SEPAL_VEC_MAX is rejected (returns 0). Returns hits written
- *  (<= k), best-first; never more than the candidate pool (m) or k. */
+ *  (<= k), best-first; never more than the candidate pool (m) or k.
+ *
+ *  Query-leaf grammar (sepal_axis_decode; the -X `sepal="…"` value):
+ *    "file=F qdim=N [m=M] [min_sim=S]"   read N LE-float32 from file F
+ *    "query='TEXT' [m=M] [min_sim=S]"    embed TEXT server-side through
+ *                                        the configured embedder
+ *    (a non-empty `query` wins over `file=`; single-quoted values may
+ *    contain spaces — stoma `query=` parity. Decode returns NULL on
+ *    missing/unreadable file, missing qdim, empty query with no file,
+ *    unconfigured embedder, fetch failure, or bad dims; the CLI then
+ *    fails the query loud via qmap_expr_error, never silent-empty.) */
 size_t sepal_search(sepal_vecstore_t *vs, const float *q, size_t qdim,
                     size_t k, float min_sim, size_t m, sepal_hit_t *out);
 

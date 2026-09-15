@@ -51,6 +51,32 @@ test_fill_basic(void)
 }
 
 static void
+test_fill_clamp(void)
+{
+	printf("=== fill: m clamped to store size (0 and >n) ===\n");
+	sepal_vecstore_t *vs = build_corpus(3, 41, 8);
+	ASSERT_NOT_NULL(vs);
+
+	float q[8];
+	sepal_rng_t r = { 42 };
+	rng_unit_vector(&r, q, 8);
+
+	rec_set_t *s1 = rec_set_new();
+	ASSERT_NOT_NULL(s1);
+	ASSERT_EQ(sepal_fill_approx(vs, q, 8, 999, 0.0f, s1), 0);
+	ASSERT(rec_set_count(s1) == 3, "m > n clamps to n");
+	ASSERT_NEAR(rec_set_recall_bound(s1), 1.0f, 1e-6f);
+	rec_set_free(s1);
+
+	rec_set_t *s0 = rec_set_new();
+	ASSERT_NOT_NULL(s0);
+	ASSERT_EQ(sepal_fill_approx(vs, q, 8, 0, 0.0f, s0), 0);
+	ASSERT(rec_set_count(s0) == 3, "m == 0 defaults to n");
+	rec_set_free(s0);
+	sepal_close(vs);
+}
+
+static void
 test_fill_contains_topk(void)
 {
 	printf("=== fill: with full pool, top-k of brute force ⊆ fill set ===\n");
@@ -182,6 +208,7 @@ int
 main(void)
 {
 	test_fill_basic();
+	test_fill_clamp();
 	test_fill_contains_topk();
 	test_fill_additive();
 	test_fill_intersect_propagation();

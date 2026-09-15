@@ -14,10 +14,12 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <libgen.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <xxhash.h>
 
 #ifdef __AVX2__
@@ -999,6 +1001,33 @@ sepal_rank(struct sepal_rank_ctx *ctx, rec_ref_t ref, float *score)
 }
 /* ---- rec_query axis registration (sepal / meaning) ---- */
 
+/* Embedder config: sepal_configure_embeddings() sets it,
+ * rec_axis_store() and sepal_axis_decode() (`query=` leaf) consume it.
+ * Defined ahead of decode (which needs it) rather than beside the
+ * store path. Cleared via all-NULL configure. */
+static struct sepal_embed_cfg {
+	char *url;
+	char *model;
+	char *key;
+	char *cache_dir;  /* query-embed cache location (store dir or env) */
+} sepal_embed_cfg;
+
+/* Default string→vector fetch (weak; defined with curl below, overridden
+ * by test binaries with canned-vector stubs). Prototype here so decode
+ * can call it. */
+__attribute__((weak)) int sepal_embed_fetch(const char *text,
+                                            float **vec_out,
+                                            size_t *n_out);
+
+/* L2 query-embed cache (AXIS-EFF plan): best-effort, on-disk, keyed by
+ * (model, text). Enabled when a cache dir exists unless
+ * QMAP_SEPAL_EMBED_CACHE=0; hits return a caller-freed vector. */
+static int embed_cache_enabled(void);
+static float *embed_cache_get(const char *model, const char *text,
+                              size_t *n_out);
+static void embed_cache_put(const char *model, const char *text,
+                            const float *v, size_t n);
+
 struct rec_sepal_params {
 	float  *q;       /* heap-owned query vector, freed never (see decode) */
 	size_t  qdim;
@@ -1031,20 +1060,26 @@ static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
 }
 
 /*
- * Decode "file=vecs.bin qdim=256 m=10 min_sim=0.5" into a heap-owned
+ * Decode "file=vecs.bin qdim=256 m=10 min_sim=0.5" — or
+ * "query='harbor lights' m=10 min_sim=0.5" — into a heap-owned
  * rec_sepal_params (freed never — one-shot CLI process lifetime, matches
  * the other axis decode fns). `file` is a flat little-endian float32 blob
  * of exactly qdim floats (NOT a VEC1 blob — that format is for entries
  * inside a sepal_vecstore_t, not for a one-off CLI query vector). `file`
  * and `qdim` are required; `m` (candidate pool, 0 = library default) and
- * `min_sim` (default 0.0) are optional. NULL on missing/unreadable file,
- * missing qdim, or OOM.
+ * `min_sim` (default 0.0) are optional. A non-empty `query` embeds the
+ * string server-side through the configured embedder (full-dim vector)
+ * and wins over `file=`; single-quoted values may contain spaces (stoma
+ * `query=` parity, lenient on unterminated quote). NULL on
+ * missing/unreadable file, missing qdim, empty query with no file, or —
+ * for the query path — unconfigured embedder, fetch failure, or bad dims.
  */
 static void *sepal_axis_decode(const char *s)
 {
 	struct rec_sepal_params *p;
 	char *buf, *cur;
 	const char *file = NULL;
+	const char *query = NULL;
 	size_t qdim = 0, m = 0;
 	float min_sim = 0.0f;
 	FILE *f;
@@ -1072,19 +1107,69 @@ static void *sepal_axis_decode(const char *s)
 			continue;
 		}
 		*cur++ = '\0';
-		val = cur;
-		while (*cur && *cur != ' ')
+		if (*cur == '\'') {
 			cur++;
-		if (*cur)
-			*cur++ = '\0';
+			val = cur;
+			while (*cur && *cur != '\'')
+				cur++;
+			if (*cur == '\'')
+				*cur++ = '\0';
+		} else {
+			val = cur;
+			while (*cur && *cur != ' ')
+				cur++;
+			if (*cur)
+				*cur++ = '\0';
+		}
 		if (!strcmp(key, "file"))
 			file = val;
+		else if (!strcmp(key, "query"))
+			query = val;
 		else if (!strcmp(key, "qdim"))
 			qdim = (size_t)atol(val);
 		else if (!strcmp(key, "m"))
 			m = (size_t)atol(val);
 		else if (!strcmp(key, "min_sim"))
 			min_sim = (float)atof(val);
+	}
+	if (query && *query) {
+		/* query-text path: embed server-side; wins over file=. First
+		 * try the on-disk embed cache (same model+text → same vector,
+		 * no HTTP round-trip); only embed fresh on a miss. Unconfigured
+		 * embedder → NULL without calling fetch or the cache. */
+		float *v = NULL;
+		size_t n = 0;
+
+		p = calloc(1, sizeof(*p));
+		if (!p) {
+			free(buf);
+			return NULL;
+		}
+		if (!sepal_embed_cfg.url) {
+			free(p);
+			free(buf);
+			return NULL;
+		}
+		if (embed_cache_enabled())
+			v = embed_cache_get(sepal_embed_cfg.model, query, &n);
+		if (!v) {
+			if (sepal_embed_fetch(query, &v, &n) != 0 ||
+			    n == 0 || n > SEPAL_VEC_MAX) {
+				free(v);
+				free(p);
+				free(buf);
+				return NULL;
+			}
+			if (embed_cache_enabled())
+				embed_cache_put(sepal_embed_cfg.model, query,
+						v, n);
+		}
+		p->q = v;
+		p->qdim = n;
+		p->m = m;
+		p->min_sim = min_sim;
+		free(buf);
+		return p;
 	}
 	if (!file || qdim == 0) {
 		free(buf);
@@ -1118,6 +1203,187 @@ static void *sepal_axis_decode(const char *s)
 	return p;
 }
 
+/* ----------------------------------------------------------------------.
+ * L2 query-embed cache (AXIS-EFF plan): best-effort append-only file
+ * "<cache_dir>/sepal-embed-cache.bin". Record (all little-endian):
+ *   [u16 klen] [key bytes] [u32 dim] [dim * f32]
+ * key = model "\0" text "\0". Best-effort: every failure is a silent miss
+ * (decode falls back to the live embedder); a corrupt/oversized file is
+ * skipped, never trusted. Bounded at SE_EMBED_CACHE_MAX bytes.
+ * ---------------------------------------------------------------------- */
+
+#define SE_EMBED_CACHE_MAX (8u << 20)
+
+static int
+embed_cache_enabled(void)
+{
+	const char *off = getenv("QMAP_SEPAL_EMBED_CACHE");
+
+	if (off && !strcmp(off, "0"))
+		return 0;
+	return sepal_embed_cfg.cache_dir && *sepal_embed_cfg.cache_dir;
+}
+
+static char *
+embed_cache_path(void)
+{
+	size_t n = strlen(sepal_embed_cfg.cache_dir);
+	static const char suf[] = "/sepal-embed-cache.bin";
+	char *path = malloc(n + sizeof(suf));
+
+	if (!path)
+		return NULL;
+	memcpy(path, sepal_embed_cfg.cache_dir, n);
+	memcpy(path + n, suf, sizeof(suf));
+	return path;
+}
+
+static void
+embed_cache_append_key(uint8_t *rec, const char *key, size_t klen)
+{
+	rec[0] = (uint8_t)(klen & 0xff);
+	rec[1] = (uint8_t)((klen >> 8) & 0xff);
+	memcpy(rec + 2, key, klen);
+}
+
+static void
+embed_cache_append_dim(uint8_t *rec, size_t dim)
+{
+	rec[0] = (uint8_t)(dim & 0xff);
+	rec[1] = (uint8_t)((dim >> 8) & 0xff);
+	rec[2] = (uint8_t)((dim >> 16) & 0xff);
+	rec[3] = (uint8_t)((dim >> 24) & 0xff);
+}
+
+static size_t
+embed_cache_key_build(const char *model, const char *text, char **out)
+{
+	size_t ml = model ? strlen(model) : 0;
+	size_t tl = text ? strlen(text) : 0;
+	char *k;
+
+	*out = NULL;
+	if (ml > 0xfffe || tl > 0xfffe || ml + tl + 2 > 0xfffe)
+		return 0;
+	k = malloc(ml + tl + 2);
+	if (!k)
+		return 0;
+	memcpy(k, model, ml);
+	k[ml] = '\0';
+	memcpy(k + ml + 1, text, tl);
+	k[ml + 1 + tl] = '\0';
+	*out = k;
+	return ml + tl + 2;
+}
+
+static float *
+embed_cache_get(const char *model, const char *text, size_t *n_out)
+{
+	struct stat st;
+	char *key = NULL;
+	size_t klen = embed_cache_key_build(model, text, &key);
+	float *hit = NULL;
+
+	*n_out = 0;
+	if (!klen)
+		return NULL;
+	char *path = embed_cache_path();
+	if (!path) {
+		free(key);
+		return NULL;
+	}
+	if (stat(path, &st) != 0 || st.st_size < 8 ||
+			st.st_size > SE_EMBED_CACHE_MAX)
+		goto out;
+	unsigned char *src = malloc((size_t)st.st_size);
+	if (!src)
+		goto out;
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		free(src);
+		goto out;
+	}
+	size_t rd = fread(src, 1, (size_t)st.st_size, f);
+	fclose(f);
+	if (rd != (size_t)st.st_size) {
+		free(src);
+		goto out;
+	}
+	size_t off = 0;
+	while (off + 2 <= rd) {
+		size_t kl = (size_t)src[off] | ((size_t)src[off + 1] << 8);
+		size_t dhdr = off + 2 + kl;
+		size_t dim;
+
+		/* corrupt header: klen pointing past EOF → bail (no OOB reads) */
+		if (dhdr + 4 > rd)
+			break;
+		dim = (size_t)src[dhdr] |
+				((size_t)src[dhdr + 1] << 8) |
+				((size_t)src[dhdr + 2] << 16) |
+				((size_t)src[dhdr + 3] << 24);
+		size_t end = dhdr + 4 + dim * sizeof(float);
+		if (end > rd || dim == 0 || dim > SEPAL_VEC_MAX)
+			break;
+		if (kl == klen && !memcmp(src + off + 2, key, klen)) {
+			hit = malloc(dim * sizeof(float));
+			if (hit) {
+				memcpy(hit, src + dhdr + 4,
+						dim * sizeof(float));
+				*n_out = dim;
+			}
+			break;
+		}
+		off = end;
+	}
+	free(src);
+out:
+	free(path);
+	free(key);
+	return hit;
+}
+
+static void
+embed_cache_put(const char *model, const char *text,
+                const float *v, size_t n)
+{
+	struct stat st;
+	char *key = NULL;
+	char *path = NULL;
+	size_t klen = embed_cache_key_build(model, text, &key);
+	size_t dim;
+
+	if (!klen || !v || n == 0 || n > SEPAL_VEC_MAX)
+		goto out;
+	dim = n;
+	if (2 + klen + 4 + dim * sizeof(float) > SE_EMBED_CACHE_MAX)
+		goto out;
+	path = embed_cache_path();
+	if (!path)
+		goto out;
+	if (stat(path, &st) == 0 && st.st_size > SE_EMBED_CACHE_MAX)
+		goto out;                      /* bounded: never grow past cap */
+	FILE *f = fopen(path, "ab");
+	if (!f)
+		goto out;
+	unsigned char *rec = malloc(2 + klen + 4 + dim * sizeof(float));
+	if (!rec) {
+		fclose(f);
+		goto out;
+	}
+	embed_cache_append_key(rec, key, klen);
+	embed_cache_append_dim(rec + 2 + klen, dim);
+	memcpy(rec + 2 + klen + 4, v, dim * sizeof(float));
+	size_t wrote = fwrite(rec, 1, 2 + klen + 4 + dim * sizeof(float), f);
+	fclose(f);
+	free(rec);
+	(void) wrote;
+	(void) wrote;
+out:
+	free(path);
+	free(key);
+}
+
 __attribute__((constructor)) static void sepal_rec_axis_init(void)
 {
 	static const rec_axis_t sepal_axis = {
@@ -1137,7 +1403,22 @@ __attribute__((constructor)) static void sepal_rec_axis_init(void)
 void *rec_axis_open(const char *spec)
 {
 	int err;
+	char *dir;
 
+	/* L2: the cache dir is the store's own dir (<primary>-sepal lives
+	 * beside the primary), so the embed cache persists per-deployment
+	 * and needs no config. Memory-only specs ("", NULL) disable it. */
+	free(sepal_embed_cfg.cache_dir);
+	sepal_embed_cfg.cache_dir = NULL;
+	if (spec && *spec) {
+		char *tmp = strdup(spec);
+		if (tmp) {
+			dir = dirname(tmp);
+			if (dir && *dir)
+				sepal_embed_cfg.cache_dir = strdup(dir);
+			free(tmp);
+		}
+	}
 	return sepal_open(spec && *spec ? spec : NULL, &err);
 }
 
@@ -1155,7 +1436,18 @@ int rec_axis_env_config(void)
 	const char *url = getenv("QMAP_SEPAL_EMBED_URL");
 	const char *model = getenv("QMAP_SEPAL_EMBED_MODEL");
 	const char *key = getenv("QMAP_SEPAL_EMBED_KEY");
+	const char *cdir = getenv("QMAP_SEPAL_EMBED_CACHE_DIR");
 
+	/* L2: optional explicit cache dir overrides the store-derived one.
+	 * The disable opt-out (QMAP_SEPAL_EMBED_CACHE=0) is read live at
+	 * each decode, so it needs no state here. */
+	if (cdir && *cdir) {
+		char *copy = strdup(cdir);
+		if (copy) {
+			free(sepal_embed_cfg.cache_dir);
+			sepal_embed_cfg.cache_dir = copy;
+		}
+	}
 	if (!url || !model)
 		return 0;               /* unconfigured: offline floats-direct */
 	if (sepal_configure_embeddings(url, model, key) != 0)
@@ -1171,14 +1463,6 @@ int rec_axis_env_config(void)
  * blindly; sepal parses the WHOLE value string in its own grammar:
  *   "f1,f2,…"  comma floats (dim = token count, 1..SEPAL_VEC_MAX) → direct
  *   else       → embedded via the configured embedder, or EINVAL.      */
-
-/* Embedder config: sepal_configure_embeddings() sets it,
- * rec_axis_store() consumes it. Cleared via all-NULL configure. */
-static struct sepal_embed_cfg {
-	char *url;
-	char *model;
-	char *key;
-} sepal_embed_cfg;
 
 int
 sepal_configure_embeddings(const char *url, const char *model,
