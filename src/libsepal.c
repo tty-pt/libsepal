@@ -1013,13 +1013,15 @@ static struct sepal_embed_cfg {
 } sepal_embed_cfg;
 
 /* D14 axis-contributed CLI options: the qmap CLI broadcasts inline
- * `--query=…` / `--min-sim=…` to every bound axis declaring them. Leaf
- * specs win over this (spec > CLI); credentials never ride argv (env-only,
- * rec_axis_env_config). Freed on sepal_close. */
+ * `--query=…` / `--min-sim=…` / `--m=…` to every bound axis declaring
+ * them. Leaf specs win over this (spec > CLI); credentials never ride
+ * argv (env-only, rec_axis_env_config). Freed on sepal_close. */
 static struct sepal_cli_cfg {
 	char *query;
 	float min_sim;
 	int min_sim_set;
+	size_t m;
+	int m_set;
 } sepal_cli_cfg;
 
 /* Default string→vector fetch (weak; defined with curl below, overridden
@@ -1097,7 +1099,7 @@ static void *sepal_axis_decode(const char *s)
 	const char *query = NULL;
 	size_t qdim = 0, m = 0;
 	float min_sim = 0.0f;
-	int has_min_sim = 0;
+	int has_min_sim = 0, has_m = 0;
 	FILE *f;
 
 	if (s && *s) {
@@ -1142,8 +1144,10 @@ static void *sepal_axis_decode(const char *s)
 				query = val;
 			else if (!strcmp(key, "qdim"))
 				qdim = (size_t)atol(val);
-			else if (!strcmp(key, "m"))
+			else if (!strcmp(key, "m")) {
+				has_m = 1;
 				m = (size_t)atol(val);
+			}
 			else if (!strcmp(key, "min_sim")) {
 				has_min_sim = 1;
 				min_sim = (float)atof(val);
@@ -1156,6 +1160,8 @@ static void *sepal_axis_decode(const char *s)
 		query = sepal_cli_cfg.query;
 	if (!has_min_sim && sepal_cli_cfg.min_sim_set)
 		min_sim = sepal_cli_cfg.min_sim;
+	if (!has_m && sepal_cli_cfg.m_set)
+		m = sepal_cli_cfg.m;
 
 	if (query && *query) {
 		/* query-text path: embed server-side; wins over file=. First
@@ -1503,6 +1509,7 @@ rec_axis_cli_options(void)
 	static const struct rec_axis_cli_option opts[] = {
 		{ "query",   1, "full-sentence embed query text" },
 		{ "min-sim", 1, "score floor (0..1)" },
+		{ "m",       1, "pool size (0 = auto)" },
 		{ NULL, 0, NULL }
 	};
 	return opts;
@@ -1537,6 +1544,18 @@ rec_axis_config_arg(const char *name, const char *value)
 		sepal_cli_cfg.min_sim_set = 1;
 		return 0;
 	}
+	if (!strcmp(name, "m")) {
+		unsigned long long mv;
+		if (!value || !*value || value[0] == '-')
+			return -1;
+		errno = 0;
+		mv = strtoull(value, &end, 10);
+		if (errno || end == value || *end != '\0')
+			return -1;
+		sepal_cli_cfg.m = (size_t)mv;
+		sepal_cli_cfg.m_set = 1;
+		return 0;
+	}
 	return -1;
 }
 
@@ -1561,6 +1580,7 @@ sepal_configure_embeddings(const char *url, const char *model,
 		free(sepal_cli_cfg.query);
 		sepal_cli_cfg.query = NULL;
 		sepal_cli_cfg.min_sim_set = 0;
+		sepal_cli_cfg.m_set = 0;
 		sepal_embed_cfg.url = sepal_embed_cfg.model =
 			sepal_embed_cfg.key = NULL;
 		return 0;

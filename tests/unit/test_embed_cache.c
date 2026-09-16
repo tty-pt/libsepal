@@ -281,16 +281,19 @@ test_cli_options(void)
 	ASSERT(rec_axis_get(slot)->decode(NULL) == NULL,
 	       "bare NULL spec without --query stays NULL");
 
-	/* declared surface advertises exactly query + min-sim */
+	/* declared surface advertises exactly query + min-sim + m */
 	{
 		const struct rec_axis_cli_read *o = rec_axis_cli_options();
 		int n = 0;
 		while (o && o[n].name)
 			n++;
-		ASSERT(n == 2, "cli table: query + min-sim");
+		ASSERT(n == 3, "cli table: query + min-sim + m");
 		ASSERT(!strcmp(o[0].name, "query"), "first option is query");
 		ASSERT(o[0].has_arg == 1, "query takes a value");
 		ASSERT(!strcmp(o[1].name, "min-sim"), "second option is min-sim");
+		ASSERT(o[1].has_arg == 1, "min-sim takes a value");
+		ASSERT(!strcmp(o[2].name, "m"), "third option is m");
+		ASSERT(o[2].has_arg == 1, "m takes a value");
 	}
 
 	/* bare-leaf CLI fallback: --query + NULL spec embeds the CLI text.
@@ -347,6 +350,40 @@ test_cli_options(void)
 		struct cli_test_params *tp = p;
 		ASSERT(tp->min_sim == 0.5f, "leaf omission falls back to --min-sim");
 	}
+
+	/* --m merges into params when the leaf omits m= */
+	ASSERT(rec_axis_config_arg("m", "10") == 0, "m 10 accepted");
+	stub_reset();
+	p = rec_axis_decode(slot, "query='pooltest'");
+	ASSERT_NOT_NULL(p);
+	{
+		struct cli_test_params *tp = p;
+		ASSERT(tp->m == (size_t)10, "CLI --m lands in params");
+		ASSERT(tp->q != NULL, "query vector present");
+	}
+
+	/* a leaf m= beats --m */
+	p = rec_axis_decode(slot, "query='pooltest' m=7");
+	ASSERT_NOT_NULL(p);
+	{
+		struct cli_test_params *tp = p;
+		ASSERT(tp->m == (size_t)7, "leaf m beats --m");
+	}
+
+	/* ... but reverting to a leaf without m= falls back again */
+	p = rec_axis_decode(slot, "query='pooltest'");
+	ASSERT_NOT_NULL(p);
+	{
+		struct cli_test_params *tp = p;
+		ASSERT(tp->m == (size_t)10, "leaf omission falls back to --m");
+	}
+
+	/* m validation: NULL/NaN/garbage/negative all rejected */
+	ASSERT(rec_axis_config_arg("m", NULL) != 0, "m NULL rejected");
+	ASSERT(rec_axis_config_arg("m", "abc") != 0, "m abc rejected");
+	ASSERT(rec_axis_config_arg("m", "12x") != 0, "m partial rejected");
+	ASSERT(rec_axis_config_arg("m", "-1") != 0, "m negative rejected");
+	ASSERT(rec_axis_config_arg("m", "0") == 0, "m zero accepted (default)");
 
 	/* arg validation: NULL/NaN/out-of-range/unknown all rejected */
 	ASSERT(rec_axis_config_arg("query", NULL) != 0, "query NULL rejected");
