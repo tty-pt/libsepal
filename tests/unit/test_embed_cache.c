@@ -246,6 +246,118 @@ test_cache_oversized(void)
 	config_unconfigured();
 }
 
+/* ── D14 axis-contributed CLI options (external dilemma: the qmap CLI
+ *    broadcasts --query / --min-sim to every bound axis declaring them).
+ *    The convention symbols are dlsym'd by qmap; the tests call them
+ *    directly through the shared lib, exactly like rec_axis_env_config. ── */
+
+extern int rec_axis_config_arg(const char *name, const char *value);
+extern const struct rec_axis_cli_read {
+	const char *name;
+	int has_arg;
+	const char *help;
+} *rec_axis_cli_options(void);
+
+/* mirror of the decode params layout (libsepal.c rec_sepal_params) */
+struct cli_test_params {
+	float *q;
+	size_t qdim;
+	size_t m;
+	float min_sim;
+};
+
+static void
+test_cli_options(void)
+{
+	printf("=== cli options: bare-leaf query fallback + spec>CLI merge ===\n");
+	int slot = find_sepal_slot();
+	ASSERT(slot >= 0, "sepal axis registered");
+	config_embed("cli-model");
+	cache_on();
+	remove(cache_path);
+	stub_reset();
+
+	/* no CLI state yet → NULL spec stays the hard-NULL regression */
+	ASSERT(rec_axis_get(slot)->decode(NULL) == NULL,
+	       "bare NULL spec without --query stays NULL");
+
+	/* declared surface advertises exactly query + min-sim */
+	{
+		const struct rec_axis_cli_read *o = rec_axis_cli_options();
+		int n = 0;
+		while (o && o[n].name)
+			n++;
+		ASSERT(n == 2, "cli table: query + min-sim");
+		ASSERT(!strcmp(o[0].name, "query"), "first option is query");
+		ASSERT(o[0].has_arg == 1, "query takes a value");
+		ASSERT(!strcmp(o[1].name, "min-sim"), "second option is min-sim");
+	}
+
+	/* bare-leaf CLI fallback: --query + NULL spec embeds the CLI text.
+	 * The expression evaluator calls axis->decode(n->value) directly
+	 * (qmap.c), so a bare `sepal` leaf reaches the plugin as NULL (the
+	 * rec_axis_decode() wrapper rejects NULL specs by contract). */
+	ASSERT_EQ(rec_axis_config_arg("query", "south pier lamp"), 0);
+	void *p = rec_axis_get(slot)->decode(NULL);
+	ASSERT_NOT_NULL(p);
+	ASSERT_EQ(stub_calls, 1);
+	ASSERT(!strcmp(stub_text, "south pier lamp"),
+	       "bare NULL spec uses --query text");
+
+	/* an empty spec with --query rides the same path (may be a cache
+	 * hit from the text just embedded above — params, not fetch, prove it) */
+	stub_reset();
+	p = rec_axis_decode(slot, "");
+	ASSERT_NOT_NULL(p);
+	{
+		struct cli_test_params *tp = p;
+		ASSERT_EQ(tp->qdim, (size_t)3);
+		ASSERT(tp->q != NULL, "query vector present (--query ride)");
+	}
+
+	/* a leaf query wins over --query */
+	stub_reset();
+	p = rec_axis_decode(slot, "query='leaftext'");
+	ASSERT_NOT_NULL(p);
+	ASSERT(!strcmp(stub_text, "leaftext"), "leaf query beats --query");
+
+	/* --min-sim merges into params when the leaf omits min_sim= */
+	ASSERT_EQ(rec_axis_config_arg("min-sim", "0.5"), 0);
+	stub_reset();
+	p = rec_axis_decode(slot, "query='hello'");
+	ASSERT_NOT_NULL(p);
+	{
+		struct cli_test_params *tp = p;
+		ASSERT(tp->min_sim == 0.5f, "--min-sim applied from CLI");
+		ASSERT_EQ(tp->qdim, (size_t)3);
+		ASSERT(tp->q != NULL, "query vector present");
+	}
+
+	/* a leaf min_sim= beats --min-sim */
+	p = rec_axis_decode(slot, "query='hello' min_sim=0.7");
+	ASSERT_NOT_NULL(p);
+	{
+		struct cli_test_params *tp = p;
+		ASSERT(tp->min_sim == 0.7f, "leaf min_sim beats --min-sim");
+	}
+	/* ... but reverting to a leaf without min_sim falls back again */
+	p = rec_axis_decode(slot, "query='hello'");
+	ASSERT_NOT_NULL(p);
+	{
+		struct cli_test_params *tp = p;
+		ASSERT(tp->min_sim == 0.5f, "leaf omission falls back to --min-sim");
+	}
+
+	/* arg validation: NULL/NaN/out-of-range/unknown all rejected */
+	ASSERT(rec_axis_config_arg("query", NULL) != 0, "query NULL rejected");
+	ASSERT(rec_axis_config_arg("min-sim", NULL) != 0, "min-sim NULL rejected");
+	ASSERT(rec_axis_config_arg("min-sim", "abc") != 0, "min-sim NaN rejected");
+	ASSERT(rec_axis_config_arg("min-sim", "1.5") != 0, "min-sim out of range");
+	ASSERT(rec_axis_config_arg("min-sim", "0.25") == 0, "min-sim in range ok");
+	ASSERT(rec_axis_config_arg("bogus", "x") != 0, "unknown option rejected");
+	config_unconfigured();
+}
+
 int
 main(void)
 {
@@ -262,6 +374,7 @@ main(void)
 	test_cache_unconfigured();
 	test_cache_corrupt_file();
 	test_cache_oversized();
+	test_cli_options();
 
 	remove(cache_path);
 	rmdir(cache_dir);

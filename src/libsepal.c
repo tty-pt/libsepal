@@ -1012,6 +1012,16 @@ static struct sepal_embed_cfg {
 	char *cache_dir;  /* query-embed cache location (store dir or env) */
 } sepal_embed_cfg;
 
+/* D14 axis-contributed CLI options: the qmap CLI broadcasts inline
+ * `--query=…` / `--min-sim=…` to every bound axis declaring them. Leaf
+ * specs win over this (spec > CLI); credentials never ride argv (env-only,
+ * rec_axis_env_config). Freed on sepal_close. */
+static struct sepal_cli_cfg {
+	char *query;
+	float min_sim;
+	int min_sim_set;
+} sepal_cli_cfg;
+
 /* Default string→vector fetch (weak; defined with curl below, overridden
  * by test binaries with canned-vector stubs). Prototype here so decode
  * can call it. */
@@ -1073,65 +1083,80 @@ static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
  * `query=` parity, lenient on unterminated quote). NULL on
  * missing/unreadable file, missing qdim, empty query with no file, or —
  * for the query path — unconfigured embedder, fetch failure, or bad dims.
+ *
+ * D14 CLI merge: the broadcast --query/--min-sim (rec_axis_config_arg)
+ * fill what the leaf omits (spec > CLI). A NULL/empty spec with a CLI
+ * query is the bare-leaf query path; without one it stays the hard-NULL
+ * regression (fill reports "axis 'sepal': fill failed").
  */
 static void *sepal_axis_decode(const char *s)
 {
 	struct rec_sepal_params *p;
-	char *buf, *cur;
+	char *buf = NULL, *cur = NULL;
 	const char *file = NULL;
 	const char *query = NULL;
 	size_t qdim = 0, m = 0;
 	float min_sim = 0.0f;
+	int has_min_sim = 0;
 	FILE *f;
 
-	if (!s)
-		return NULL;
-	buf = malloc(strlen(s) + 1);
-	if (!buf)
-		return NULL;
-	strcpy(buf, s);
-	cur = buf;
-	while (*cur) {
-		char *key, *val;
+	if (s && *s) {
+		buf = malloc(strlen(s) + 1);
+		if (!buf)
+			return NULL;
+		strcpy(buf, s);
+		cur = buf;
+		while (*cur) {
+			char *key, *val;
 
-		while (*cur == ' ')
-			cur++;
-		if (!*cur)
-			break;
-		key = cur;
-		while (*cur && *cur != '=' && *cur != ' ')
-			cur++;
-		if (*cur != '=') {
-			if (*cur)
+			while (*cur == ' ')
 				cur++;
-			continue;
+			if (!*cur)
+				break;
+			key = cur;
+			while (*cur && *cur != '=' && *cur != ' ')
+				cur++;
+			if (*cur != '=') {
+				if (*cur)
+					cur++;
+				continue;
+			}
+			*cur++ = '\0';
+			if (*cur == '\'') {
+				cur++;
+				val = cur;
+				while (*cur && *cur != '\'')
+					cur++;
+				if (*cur == '\'')
+					*cur++ = '\0';
+			} else {
+				val = cur;
+				while (*cur && *cur != ' ')
+					cur++;
+				if (*cur)
+					*cur++ = '\0';
+			}
+			if (!strcmp(key, "file"))
+				file = val;
+			else if (!strcmp(key, "query"))
+				query = val;
+			else if (!strcmp(key, "qdim"))
+				qdim = (size_t)atol(val);
+			else if (!strcmp(key, "m"))
+				m = (size_t)atol(val);
+			else if (!strcmp(key, "min_sim")) {
+				has_min_sim = 1;
+				min_sim = (float)atof(val);
+			}
 		}
-		*cur++ = '\0';
-		if (*cur == '\'') {
-			cur++;
-			val = cur;
-			while (*cur && *cur != '\'')
-				cur++;
-			if (*cur == '\'')
-				*cur++ = '\0';
-		} else {
-			val = cur;
-			while (*cur && *cur != ' ')
-				cur++;
-			if (*cur)
-				*cur++ = '\0';
-		}
-		if (!strcmp(key, "file"))
-			file = val;
-		else if (!strcmp(key, "query"))
-			query = val;
-		else if (!strcmp(key, "qdim"))
-			qdim = (size_t)atol(val);
-		else if (!strcmp(key, "m"))
-			m = (size_t)atol(val);
-		else if (!strcmp(key, "min_sim"))
-			min_sim = (float)atof(val);
 	}
+
+	/* D14 merge: leaf wins, CLI fills the gaps. */
+	if (!(query && *query))
+		query = sepal_cli_cfg.query;
+	if (!has_min_sim && sepal_cli_cfg.min_sim_set)
+		min_sim = sepal_cli_cfg.min_sim;
+
 	if (query && *query) {
 		/* query-text path: embed server-side; wins over file=. First
 		 * try the on-disk embed cache (same model+text → same vector,
@@ -1456,6 +1481,65 @@ int rec_axis_env_config(void)
 	return 0;
 }
 
+/*
+ * rec_axis_cli_options / rec_axis_config_arg conventions (D14: optional
+ * axis-contributed CLI options — not libqmap core API): qmap collects
+ * inline `--name=value` tokens and, once every bound axis is connected,
+ * broadcasts each to the declarations via these dlsym'd symbols. sepal
+ * declares `query` (full-sentence embed text) and `min-sim` (score floor);
+ * decode merges them (leaf spec wins; CLI fills the gaps). Credentials
+ * stay env-only. The option struct mirrors libqmap's local layout — the
+ * two are never compiled together.
+ */
+struct rec_axis_cli_option {
+	const char *name;
+	int has_arg;
+	const char *help;
+};
+
+const struct rec_axis_cli_option *
+rec_axis_cli_options(void)
+{
+	static const struct rec_axis_cli_option opts[] = {
+		{ "query",   1, "full-sentence embed query text" },
+		{ "min-sim", 1, "score floor (0..1)" },
+		{ NULL, 0, NULL }
+	};
+	return opts;
+}
+
+int
+rec_axis_config_arg(const char *name, const char *value)
+{
+	char *copy;
+	char *end;
+	float v;
+
+	if (!name)
+		return -1;
+	if (!strcmp(name, "query")) {
+		if (!value)
+			return -1;
+		copy = strdup(value);
+		if (!copy)
+			return -1;
+		free(sepal_cli_cfg.query);
+		sepal_cli_cfg.query = copy;
+		return 0;
+	}
+	if (!strcmp(name, "min-sim")) {
+		if (!value)
+			return -1;
+		v = strtof(value, &end);
+		if (end == value || *end != '\0' || v < 0.0f || v > 1.0f)
+			return -1;
+		sepal_cli_cfg.min_sim = v;
+		sepal_cli_cfg.min_sim_set = 1;
+		return 0;
+	}
+	return -1;
+}
+
 /* ----------------------------------------------------------------------.
  * rec_axis_store / rec_axis_unstore / rec_axis_readback (Phase 2A
  * store contract, RECALL-KERNEL.md "rec_axis_store convention", optional
@@ -1474,6 +1558,9 @@ sepal_configure_embeddings(const char *url, const char *model,
 		free(sepal_embed_cfg.url);
 		free(sepal_embed_cfg.model);
 		free(sepal_embed_cfg.key);
+		free(sepal_cli_cfg.query);
+		sepal_cli_cfg.query = NULL;
+		sepal_cli_cfg.min_sim_set = 0;
 		sepal_embed_cfg.url = sepal_embed_cfg.model =
 			sepal_embed_cfg.key = NULL;
 		return 0;
