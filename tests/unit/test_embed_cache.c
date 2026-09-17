@@ -281,19 +281,23 @@ test_cli_options(void)
 	ASSERT(rec_axis_get(slot)->decode(NULL) == NULL,
 	       "bare NULL spec without --query stays NULL");
 
-	/* declared surface advertises exactly query + min-sim + m */
+	/* declared surface advertises exactly query + file + qdim + min-sim + m */
 	{
 		const struct rec_axis_cli_read *o = rec_axis_cli_options();
 		int n = 0;
 		while (o && o[n].name)
 			n++;
-		ASSERT(n == 3, "cli table: query + min-sim + m");
+		ASSERT(n == 5, "cli table: query + file + qdim + min-sim + m");
 		ASSERT(!strcmp(o[0].name, "query"), "first option is query");
 		ASSERT(o[0].has_arg == 1, "query takes a value");
-		ASSERT(!strcmp(o[1].name, "min-sim"), "second option is min-sim");
-		ASSERT(o[1].has_arg == 1, "min-sim takes a value");
-		ASSERT(!strcmp(o[2].name, "m"), "third option is m");
-		ASSERT(o[2].has_arg == 1, "m takes a value");
+		ASSERT(!strcmp(o[1].name, "file"), "second option is file");
+		ASSERT(o[1].has_arg == 1, "file takes a value");
+		ASSERT(!strcmp(o[2].name, "qdim"), "third option is qdim");
+		ASSERT(o[2].has_arg == 1, "qdim takes a value");
+		ASSERT(!strcmp(o[3].name, "min-sim"), "fourth option is min-sim");
+		ASSERT(o[3].has_arg == 1, "min-sim takes a value");
+		ASSERT(!strcmp(o[4].name, "m"), "fifth option is m");
+		ASSERT(o[4].has_arg == 1, "m takes a value");
 	}
 
 	/* bare-leaf CLI fallback: --query + NULL spec embeds the CLI text.

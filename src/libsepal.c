@@ -1013,11 +1013,15 @@ static struct sepal_embed_cfg {
 } sepal_embed_cfg;
 
 /* D14 axis-contributed CLI options: the qmap CLI broadcasts inline
- * `--query=…` / `--min-sim=…` / `--m=…` to every bound axis declaring
- * them. Leaf specs win over this (spec > CLI); credentials never ride
- * argv (env-only, rec_axis_env_config). Freed on sepal_close. */
+ * `--query=…` / `--file=…` / `--qdim=…` / `--min-sim=…` / `--m=…` to
+ * every bound axis declaring them. Leaf specs win over this (spec > CLI);
+ * credentials never ride argv (env-only, rec_axis_env_config). Freed on
+ * sepal_close. */
 static struct sepal_cli_cfg {
 	char *query;
+	char *file;
+	size_t qdim;
+	int qdim_set;
 	float min_sim;
 	int min_sim_set;
 	size_t m;
@@ -1099,7 +1103,7 @@ static void *sepal_axis_decode(const char *s)
 	const char *query = NULL;
 	size_t qdim = 0, m = 0;
 	float min_sim = 0.0f;
-	int has_min_sim = 0, has_m = 0;
+	int has_min_sim = 0, has_m = 0, has_qdim = 0;
 	FILE *f;
 
 	if (s && *s) {
@@ -1125,12 +1129,21 @@ static void *sepal_axis_decode(const char *s)
 			}
 			*cur++ = '\0';
 			if (*cur == '\'') {
+				char *dst;
 				cur++;
-				val = cur;
-				while (*cur && *cur != '\'')
-					cur++;
-				if (*cur == '\'')
-					*cur++ = '\0';
+				val = dst = cur;
+				while (*cur) {
+					if (*cur == '\\' && cur[1]) {
+						cur++;
+						*dst++ = *cur++;
+					} else if (*cur == '\'') {
+						cur++;
+						break;
+					} else {
+						*dst++ = *cur++;
+					}
+				}
+				*dst = '\0';
 			} else {
 				val = cur;
 				while (*cur && *cur != ' ')
@@ -1142,8 +1155,10 @@ static void *sepal_axis_decode(const char *s)
 				file = val;
 			else if (!strcmp(key, "query"))
 				query = val;
-			else if (!strcmp(key, "qdim"))
+			else if (!strcmp(key, "qdim")) {
+				has_qdim = 1;
 				qdim = (size_t)atol(val);
+			}
 			else if (!strcmp(key, "m")) {
 				has_m = 1;
 				m = (size_t)atol(val);
@@ -1158,6 +1173,10 @@ static void *sepal_axis_decode(const char *s)
 	/* D14 merge: leaf wins, CLI fills the gaps. */
 	if (!(query && *query))
 		query = sepal_cli_cfg.query;
+	if (!(file && *file))
+		file = sepal_cli_cfg.file;
+	if (!has_qdim && sepal_cli_cfg.qdim_set)
+		qdim = sepal_cli_cfg.qdim;
 	if (!has_min_sim && sepal_cli_cfg.min_sim_set)
 		min_sim = sepal_cli_cfg.min_sim;
 	if (!has_m && sepal_cli_cfg.m_set)
@@ -1508,6 +1527,8 @@ rec_axis_cli_options(void)
 {
 	static const struct rec_axis_cli_option opts[] = {
 		{ "query",   1, "full-sentence embed query text" },
+		{ "file",    1, "flat float32 vec file (fallback when query unset)" },
+		{ "qdim",    1, "dim of the file vector (>0, <= SEPAL_VEC_MAX)" },
 		{ "min-sim", 1, "score floor (0..1)" },
 		{ "m",       1, "pool size (0 = auto)" },
 		{ NULL, 0, NULL }
@@ -1532,6 +1553,29 @@ rec_axis_config_arg(const char *name, const char *value)
 			return -1;
 		free(sepal_cli_cfg.query);
 		sepal_cli_cfg.query = copy;
+		return 0;
+	}
+	if (!strcmp(name, "file")) {
+		if (!value || !*value)
+			return -1;
+		copy = strdup(value);
+		if (!copy)
+			return -1;
+		free(sepal_cli_cfg.file);
+		sepal_cli_cfg.file = copy;
+		return 0;
+	}
+	if (!strcmp(name, "qdim")) {
+		unsigned long long qv;
+		if (!value || !*value || value[0] == '-')
+			return -1;
+		errno = 0;
+		qv = strtoull(value, &end, 10);
+		if (errno || end == value || *end != '\0' || qv == 0
+		    || qv > SEPAL_VEC_MAX)
+			return -1;
+		sepal_cli_cfg.qdim = (size_t)qv;
+		sepal_cli_cfg.qdim_set = 1;
 		return 0;
 	}
 	if (!strcmp(name, "min-sim")) {
@@ -1578,7 +1622,10 @@ sepal_configure_embeddings(const char *url, const char *model,
 		free(sepal_embed_cfg.model);
 		free(sepal_embed_cfg.key);
 		free(sepal_cli_cfg.query);
+		free(sepal_cli_cfg.file);
 		sepal_cli_cfg.query = NULL;
+		sepal_cli_cfg.file = NULL;
+		sepal_cli_cfg.qdim_set = 0;
 		sepal_cli_cfg.min_sim_set = 0;
 		sepal_cli_cfg.m_set = 0;
 		sepal_embed_cfg.url = sepal_embed_cfg.model =
