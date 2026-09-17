@@ -252,11 +252,7 @@ test_cache_oversized(void)
  *    directly through the shared lib, exactly like rec_axis_env_config. ── */
 
 extern int rec_axis_config_arg(const char *name, const char *value);
-extern const struct rec_axis_cli_read {
-	const char *name;
-	int has_arg;
-	const char *help;
-} *rec_axis_cli_options(void);
+extern const struct rec_axis_cli_option *rec_axis_cli_options(void);
 
 /* mirror of the decode params layout (libsepal.c rec_sepal_params) */
 struct cli_test_params {
@@ -283,7 +279,7 @@ test_cli_options(void)
 
 	/* declared surface advertises exactly query + file + qdim + min-sim + m */
 	{
-		const struct rec_axis_cli_read *o = rec_axis_cli_options();
+		const struct rec_axis_cli_option *o = rec_axis_cli_options();
 		int n = 0;
 		while (o && o[n].name)
 			n++;

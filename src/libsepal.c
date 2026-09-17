@@ -1077,18 +1077,21 @@ static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
 
 /*
  * Decode "file=vecs.bin qdim=256 m=10 min_sim=0.5" — or
- * "query='harbor lights' m=10 min_sim=0.5" — into a heap-owned
- * rec_sepal_params (freed never — one-shot CLI process lifetime, matches
- * the other axis decode fns). `file` is a flat little-endian float32 blob
- * of exactly qdim floats (NOT a VEC1 blob — that format is for entries
- * inside a sepal_vecstore_t, not for a one-off CLI query vector). `file`
- * and `qdim` are required; `m` (candidate pool, 0 = library default) and
- * `min_sim` (default 0.0) are optional. A non-empty `query` embeds the
- * string server-side through the configured embedder (full-dim vector)
- * and wins over `file=`; single-quoted values may contain spaces (stoma
- * `query=` parity, lenient on unterminated quote). NULL on
- * missing/unreadable file, missing qdim, empty query with no file, or —
- * for the query path — unconfigured embedder, fetch failure, or bad dims.
+ * "query='harbor lights' m=10 min-sim=0.5" — into a heap-owned
+ * rec_sepal_params. The decode-spec grammar is kernel-owned (ttypt/rec.h
+ * rec_spec_next); this buffer is freed before returning. `file` is a flat
+ * little-endian float32 blob of exactly qdim floats (NOT a VEC1 blob —
+ * that format is for entries inside a sepal_vecstore_t, not for a one-off
+ * CLI query vector). `file` and `qdim` are required; `m` (candidate pool,
+ * 0 = library default) and the similarity floor (default 0.0) are
+ * optional — under the canonical CLI name `min-sim` AND the documented
+ * leaf-spec alias `min_sim` (both map to the same field). A non-empty
+ * `query` embeds the string server-side through the configured embedder
+ * (full-dim vector) and wins over `file=`; single-quoted values may
+ * contain spaces (stoma `query=` parity, lenient on unterminated quote).
+ * NULL on missing/unreadable file, missing qdim, empty query with no
+ * file, or — for the query path — unconfigured embedder, fetch failure,
+ * or bad dims.
  *
  * D14 CLI merge: the broadcast --query/--min-sim (rec_axis_config_arg)
  * fill what the leaf omits (spec > CLI). A NULL/empty spec with a CLI
@@ -1098,7 +1101,7 @@ static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
 static void *sepal_axis_decode(const char *s)
 {
 	struct rec_sepal_params *p;
-	char *buf = NULL, *cur = NULL;
+	char *buf = NULL;
 	const char *file = NULL;
 	const char *query = NULL;
 	size_t qdim = 0, m = 0;
@@ -1107,50 +1110,13 @@ static void *sepal_axis_decode(const char *s)
 	FILE *f;
 
 	if (s && *s) {
-		buf = malloc(strlen(s) + 1);
+		buf = strdup(s);
 		if (!buf)
 			return NULL;
-		strcpy(buf, s);
-		cur = buf;
-		while (*cur) {
-			char *key, *val;
-
-			while (*cur == ' ')
-				cur++;
-			if (!*cur)
-				break;
-			key = cur;
-			while (*cur && *cur != '=' && *cur != ' ')
-				cur++;
-			if (*cur != '=') {
-				if (*cur)
-					cur++;
+		for (char *cur = buf, *key, *val;
+		     rec_spec_next(&cur, &key, &val); ) {
+			if (!val)
 				continue;
-			}
-			*cur++ = '\0';
-			if (*cur == '\'') {
-				char *dst;
-				cur++;
-				val = dst = cur;
-				while (*cur) {
-					if (*cur == '\\' && cur[1]) {
-						cur++;
-						*dst++ = *cur++;
-					} else if (*cur == '\'') {
-						cur++;
-						break;
-					} else {
-						*dst++ = *cur++;
-					}
-				}
-				*dst = '\0';
-			} else {
-				val = cur;
-				while (*cur && *cur != ' ')
-					cur++;
-				if (*cur)
-					*cur++ = '\0';
-			}
 			if (!strcmp(key, "file"))
 				file = val;
 			else if (!strcmp(key, "query"))
@@ -1163,7 +1129,11 @@ static void *sepal_axis_decode(const char *s)
 				has_m = 1;
 				m = (size_t)atol(val);
 			}
-			else if (!strcmp(key, "min_sim")) {
+			/* Canonical CLI name is min-sim; min_sim stays the
+			 * documented leaf-spec key (AXIS-CLI-ABI §4 — both
+			 * map to the same field). */
+			else if (!strcmp(key, "min-sim")
+					|| !strcmp(key, "min_sim")) {
 				has_min_sim = 1;
 				min_sim = (float)atof(val);
 			}
@@ -1513,15 +1483,8 @@ int rec_axis_env_config(void)
  * broadcasts each to the declarations via these dlsym'd symbols. sepal
  * declares `query` (full-sentence embed text) and `min-sim` (score floor);
  * decode merges them (leaf spec wins; CLI fills the gaps). Credentials
- * stay env-only. The option struct mirrors libqmap's local layout — the
- * two are never compiled together.
+ * stay env-only. The option struct ABI is kernel-owned in <ttypt/rec.h>.
  */
-struct rec_axis_cli_option {
-	const char *name;
-	int has_arg;
-	const char *help;
-};
-
 const struct rec_axis_cli_option *
 rec_axis_cli_options(void)
 {
@@ -1539,8 +1502,7 @@ rec_axis_cli_options(void)
 int
 rec_axis_config_arg(const char *name, const char *value)
 {
-	char *copy;
-	char *end;
+	size_t qv, mv;
 	float v;
 
 	if (!name)
@@ -1548,55 +1510,32 @@ rec_axis_config_arg(const char *name, const char *value)
 	if (!strcmp(name, "query")) {
 		if (!value)
 			return -1;
-		copy = strdup(value);
-		if (!copy)
-			return -1;
-		free(sepal_cli_cfg.query);
-		sepal_cli_cfg.query = copy;
-		return 0;
+		return rec_cli_str_set(&sepal_cli_cfg.query, value);
 	}
 	if (!strcmp(name, "file")) {
 		if (!value || !*value)
 			return -1;
-		copy = strdup(value);
-		if (!copy)
-			return -1;
-		free(sepal_cli_cfg.file);
-		sepal_cli_cfg.file = copy;
-		return 0;
+		return rec_cli_str_set(&sepal_cli_cfg.file, value);
 	}
 	if (!strcmp(name, "qdim")) {
-		unsigned long long qv;
-		if (!value || !*value || value[0] == '-')
-			return -1;
-		errno = 0;
-		qv = strtoull(value, &end, 10);
-		if (errno || end == value || *end != '\0' || qv == 0
+		if (rec_cli_size(value, &qv) != 0 || qv == 0
 		    || qv > SEPAL_VEC_MAX)
 			return -1;
-		sepal_cli_cfg.qdim = (size_t)qv;
+		sepal_cli_cfg.qdim = qv;
 		sepal_cli_cfg.qdim_set = 1;
 		return 0;
 	}
 	if (!strcmp(name, "min-sim")) {
-		if (!value)
-			return -1;
-		v = strtof(value, &end);
-		if (end == value || *end != '\0' || v < 0.0f || v > 1.0f)
+		if (rec_cli_float(value, &v) != 0 || v < 0.0f || v > 1.0f)
 			return -1;
 		sepal_cli_cfg.min_sim = v;
 		sepal_cli_cfg.min_sim_set = 1;
 		return 0;
 	}
 	if (!strcmp(name, "m")) {
-		unsigned long long mv;
-		if (!value || !*value || value[0] == '-')
+		if (rec_cli_size(value, &mv) != 0)
 			return -1;
-		errno = 0;
-		mv = strtoull(value, &end, 10);
-		if (errno || end == value || *end != '\0')
-			return -1;
-		sepal_cli_cfg.m = (size_t)mv;
+		sepal_cli_cfg.m = mv;
 		sepal_cli_cfg.m_set = 1;
 		return 0;
 	}
