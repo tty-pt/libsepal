@@ -4,8 +4,11 @@ LDLIBS-libsepal := -lqsys -lqmap -lxxhash -lm
 LDFLAGS-libsepal := -L/home/quirinpa/site/external/libqmap/lib
 
 CFLAGS := -g
-CFLAGS += -O3 -mpopcnt -mavx2 -mfma
+CFLAGS += -O3
 CFLAGS += -I/home/quirinpa/site/external/libqmap/include
+
+CFLAGS-x86_64 := -mpopcnt -mavx2 -mfma
+CFLAGS-amd64 := -mpopcnt -mavx2 -mfma
 
 include ../mk/include.mk
 

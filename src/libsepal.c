@@ -11,8 +11,8 @@
 #include "../include/ttypt/sepal.h"
 
 #include <ttypt/qmap.h>
+#include <ttypt/qsys.h>
 
-#include <dlfcn.h>
 #include <errno.h>
 #include <libgen.h>
 #include <math.h>
@@ -1079,7 +1079,10 @@ static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
  * Decode "file=vecs.bin qdim=256 m=10 min_sim=0.5" — or
  * "query='harbor lights' m=10 min-sim=0.5" — into a heap-owned
  * rec_sepal_params. The decode-spec grammar is kernel-owned (ttypt/rec.h
- * rec_spec_next); this buffer is freed before returning. `file` is a flat
+ * rec_spec_scan): values are parsed in place with bounded parsers, so
+ * decode allocates nothing until the params calloc plus ONE owned string
+ * copy for whichever of query/file actually resolves (the leaf's; CLI
+ * fallbacks are borrowed process-lifetime globals). `file` is a flat
  * little-endian float32 blob of exactly qdim floats (NOT a VEC1 blob —
  * that format is for entries inside a sepal_vecstore_t, not for a one-off
  * CLI query vector). `file` and `qdim` are required; `m` (candidate pool,
@@ -1101,50 +1104,57 @@ static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
 static void *sepal_axis_decode(const char *s)
 {
 	struct rec_sepal_params *p;
-	char *buf = NULL;
-	const char *file = NULL;
-	const char *query = NULL;
+	const char *f_leaf = NULL, *q_leaf = NULL;
+	size_t f_len = 0, q_len = 0;
+	int f_quoted = 0, q_quoted = 0;
 	size_t qdim = 0, m = 0;
 	float min_sim = 0.0f;
 	int has_min_sim = 0, has_m = 0, has_qdim = 0;
 	FILE *f;
+	char *q_owned = NULL;
+	const char *query;
 
 	if (s && *s) {
-		buf = strdup(s);
-		if (!buf)
-			return NULL;
-		for (char *cur = buf, *key, *val;
-		     rec_spec_next(&cur, &key, &val); ) {
-			if (!val)
-				continue;
-			if (!strcmp(key, "file"))
-				file = val;
-			else if (!strcmp(key, "query"))
-				query = val;
-			else if (!strcmp(key, "qdim")) {
-				has_qdim = 1;
-				qdim = (size_t)atol(val);
-			}
-			else if (!strcmp(key, "m")) {
-				has_m = 1;
-				m = (size_t)atol(val);
+		const char *cur = s, *key, *val;
+		size_t klen, vlen;
+		int quoted;
+
+		while (rec_spec_scan(&cur, &key, &klen, &val, &vlen,
+				     &quoted)) {
+			if (rec_key_eq(key, klen, "file")) {
+				f_leaf = val;
+				f_len = vlen;
+				f_quoted = quoted;
+			} else if (rec_key_eq(key, klen, "query")) {
+				q_leaf = val;
+				q_len = vlen;
+				q_quoted = quoted;
+			} else if (rec_key_eq(key, klen, "qdim")) {
+				if (rec_cli_size_b(val, val + vlen, &qdim) == 0)
+					has_qdim = 1;
+			} else if (rec_key_eq(key, klen, "m")) {
+				if (rec_cli_size_b(val, val + vlen, &m) == 0)
+					has_m = 1;
 			}
 			/* Canonical CLI name is min-sim; min_sim stays the
 			 * documented leaf-spec key (AXIS-CLI-ABI §4 — both
 			 * map to the same field). */
-			else if (!strcmp(key, "min-sim")
-					|| !strcmp(key, "min_sim")) {
-				has_min_sim = 1;
-				min_sim = (float)atof(val);
+			else if (rec_key_eq(key, klen, "min-sim")
+					|| rec_key_eq(key, klen, "min_sim")) {
+				if (rec_cli_float_b(val, val + vlen,
+						    &min_sim) == 0)
+					has_min_sim = 1;
 			}
 		}
 	}
 
 	/* D14 merge: leaf wins, CLI fills the gaps. */
-	if (!(query && *query))
+	if (q_len > 0) {
+		if (rec_cli_str_dup(q_leaf, q_len, q_quoted, &q_owned) != 0)
+			return NULL;
+		query = q_owned;
+	} else
 		query = sepal_cli_cfg.query;
-	if (!(file && *file))
-		file = sepal_cli_cfg.file;
 	if (!has_qdim && sepal_cli_cfg.qdim_set)
 		qdim = sepal_cli_cfg.qdim;
 	if (!has_min_sim && sepal_cli_cfg.min_sim_set)
@@ -1162,12 +1172,12 @@ static void *sepal_axis_decode(const char *s)
 
 		p = calloc(1, sizeof(*p));
 		if (!p) {
-			free(buf);
+			free(q_owned);
 			return NULL;
 		}
 		if (!sepal_embed_cfg.url) {
 			free(p);
-			free(buf);
+			free(q_owned);
 			return NULL;
 		}
 		if (embed_cache_enabled())
@@ -1177,49 +1187,64 @@ static void *sepal_axis_decode(const char *s)
 			    n == 0 || n > SEPAL_VEC_MAX) {
 				free(v);
 				free(p);
-				free(buf);
+				free(q_owned);
 				return NULL;
 			}
 			if (embed_cache_enabled())
 				embed_cache_put(sepal_embed_cfg.model, query,
 						v, n);
 		}
+		free(q_owned);
 		p->q = v;
 		p->qdim = n;
 		p->m = m;
 		p->min_sim = min_sim;
-		free(buf);
 		return p;
 	}
-	if (!file || qdim == 0) {
-		free(buf);
-		return NULL;
+	free(q_owned);
+
+	/* file path: one owned copy of the leaf's file name only. */
+	{
+		char *f_owned = NULL;
+		const char *file;
+
+		if (f_len > 0) {
+			if (rec_cli_str_dup(f_leaf, f_len, f_quoted,
+					    &f_owned) != 0)
+				return NULL;
+			file = f_owned;
+		} else
+			file = sepal_cli_cfg.file;
+		if (!file || qdim == 0) {
+			free(f_owned);
+			return NULL;
+		}
+		p = calloc(1, sizeof(*p));
+		if (!p) {
+			free(f_owned);
+			return NULL;
+		}
+		p->q = malloc(qdim * sizeof(float));
+		if (!p->q) {
+			free(p);
+			free(f_owned);
+			return NULL;
+		}
+		f = fopen(file, "rb");
+		if (!f || fread(p->q, sizeof(float), qdim, f) != qdim) {
+			if (f)
+				fclose(f);
+			free(p->q);
+			free(p);
+			free(f_owned);
+			return NULL;
+		}
+		fclose(f);
+		free(f_owned);
 	}
-	p = calloc(1, sizeof(*p));
-	if (!p) {
-		free(buf);
-		return NULL;
-	}
-	p->q = malloc(qdim * sizeof(float));
-	if (!p->q) {
-		free(p);
-		free(buf);
-		return NULL;
-	}
-	f = fopen(file, "rb");
-	if (!f || fread(p->q, sizeof(float), qdim, f) != qdim) {
-		if (f)
-			fclose(f);
-		free(p->q);
-		free(p);
-		free(buf);
-		return NULL;
-	}
-	fclose(f);
 	p->qdim = qdim;
 	p->m = m;
 	p->min_sim = min_sim;
-	free(buf);
 	return p;
 }
 
@@ -1700,35 +1725,39 @@ static void                  *sepal_curl_dl;
 static int
 sepal_curl_ensure(void)
 {
-	const char *names[] = { "libcurl.so.4", "libcurl.so", NULL };
+	const char *names[] = { "libcurl.so.4", "libcurl.so",
+#ifdef _WIN32
+		"libcurl-4.dll", "libcurl.dll",
+#endif
+		NULL };
 	size_t i;
 	void *sym;
 
 	if (sepal_curl.loaded)
 		return 0;
 	for (i = 0; names[i]; i++) {
-		sepal_curl_dl = dlopen(names[i], RTLD_LAZY);
+		sepal_curl_dl = qsys_dlopen(names[i], 0);
 		if (sepal_curl_dl)
 			break;
 	}
 	if (!sepal_curl_dl)
 		return -1;
-	sym = dlsym(sepal_curl_dl, "curl_easy_init");
+	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_init");
 	memcpy(&sepal_curl.easy_init, &sym, sizeof(sepal_curl.easy_init));
-	sym = dlsym(sepal_curl_dl, "curl_easy_setopt");
+	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_setopt");
 	memcpy(&sepal_curl.easy_setopt, &sym, sizeof(sepal_curl.easy_setopt));
-	sym = dlsym(sepal_curl_dl, "curl_easy_perform");
+	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_perform");
 	memcpy(&sepal_curl.easy_perform, &sym, sizeof(sepal_curl.easy_perform));
-	sym = dlsym(sepal_curl_dl, "curl_easy_cleanup");
+	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_cleanup");
 	memcpy(&sepal_curl.easy_cleanup, &sym,
 	       sizeof(sepal_curl.easy_cleanup));
-	sym = dlsym(sepal_curl_dl, "curl_easy_getinfo");
+	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_getinfo");
 	memcpy(&sepal_curl.easy_getinfo, &sym,
 	       sizeof(sepal_curl.easy_getinfo));
-	sym = dlsym(sepal_curl_dl, "curl_slist_append");
+	sym = qsys_dlsym(sepal_curl_dl, "curl_slist_append");
 	memcpy(&sepal_curl.slist_append, &sym,
 	       sizeof(sepal_curl.slist_append));
-	sym = dlsym(sepal_curl_dl, "curl_slist_free_all");
+	sym = qsys_dlsym(sepal_curl_dl, "curl_slist_free_all");
 	memcpy(&sepal_curl.slist_free_all, &sym,
 	       sizeof(sepal_curl.slist_free_all));
 	if (!sepal_curl.easy_init || !sepal_curl.easy_setopt ||

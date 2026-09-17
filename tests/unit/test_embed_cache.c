@@ -20,6 +20,7 @@
 
 #include "../test_common.h"
 #include <ttypt/rec.h>
+#include <ttypt/qsys.h>
 #include <unistd.h>
 
 static float stub_vec[] = { 0.5f, -0.25f, 0.75f };
@@ -75,8 +76,8 @@ static char cache_path[96];
 static void
 cache_on(void)
 {
-	ASSERT_EQ(setenv("QMAP_SEPAL_EMBED_CACHE_DIR", cache_dir, 1), 0);
-	ASSERT_EQ(unsetenv("QMAP_SEPAL_EMBED_CACHE"), 0);
+	ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_CACHE_DIR", cache_dir, 1), 0);
+	ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_CACHE"), 0);
 	/* cache_dir only lands in the cfg when rec_axis_env_config() runs, so
 	 * re-apply after the env is in place. */
 	ASSERT_EQ(rec_axis_env_config(), 0);
@@ -85,7 +86,7 @@ cache_on(void)
 static void
 cache_off(void)
 {
-	ASSERT_EQ(setenv("QMAP_SEPAL_EMBED_CACHE", "0", 1), 0);
+	ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_CACHE", "0", 1), 0);
 }
 
 /* cache_dir is populated only by rec_axis_env_config / rec_axis_open —
@@ -96,11 +97,11 @@ static void
 config_embed(const char *model)
 {
 	ASSERT_EQ(sepal_configure_embeddings(NULL, NULL, NULL), 0);
-	ASSERT_EQ(setenv("QMAP_SEPAL_EMBED_URL", "http://localhost:9/none", 1), 0);
+	ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_URL", "http://localhost:9/none", 1), 0);
 	if (model)
-		ASSERT_EQ(setenv("QMAP_SEPAL_EMBED_MODEL", model, 1), 0);
+		ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_MODEL", model, 1), 0);
 	else
-		ASSERT_EQ(unsetenv("QMAP_SEPAL_EMBED_MODEL"), 0);
+		ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_MODEL"), 0);
 	ASSERT_EQ(rec_axis_env_config(), 0);
 }
 
@@ -108,8 +109,8 @@ static void
 config_unconfigured(void)
 {
 	ASSERT_EQ(sepal_configure_embeddings(NULL, NULL, NULL), 0);
-	ASSERT_EQ(unsetenv("QMAP_SEPAL_EMBED_URL"), 0);
-	ASSERT_EQ(unsetenv("QMAP_SEPAL_EMBED_MODEL"), 0);
+	ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_URL"), 0);
+	ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_MODEL"), 0);
 	ASSERT_EQ(rec_axis_env_config(), 0);
 }
 
