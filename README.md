@@ -19,7 +19,7 @@ fill declares its approximate-ness so downstream recall stays honest.
   (`m/n`); joins propagate the flag via the kernel extension
 - **Exact rerank callback**: `sepal_rank()` scores one ref (a `rec_score_fn`
   shape: 0 ok, nonzero when missing / dim-mismatched / below `min_sim`)
-- **File persistence**: optional sidecar via libqmap; `sepal_close()` saves
+- **File persistence**: optional sidecar via libcorm; `sepal_close()` saves
   (never closes — the file would truncate to 0, same invariant as mm);
   the vector count is restored from the file on open
 - **Flat sketch index**: stage-1 scans contiguous `idx_sk` rows
@@ -107,16 +107,16 @@ prefilter 3.3×/4.4×, rerank 1.44×/1.63×, total 2.9×/4.3× faster at
 ## Building & testing
 
 ```sh
-make          # builds lib/libsepal.so (needs ../mk + the site-tree libqmap)
+make          # builds lib/libsepal.so (needs ../mk + the site-tree libcorm)
 make test     # unit + integration + property + stress (see tests/TESTING.md)
 make bench    # two-stage vs brute force (records study §12.4)
 make -C tests valgrind | asan | ubsan
 ```
 
 Binaries carry no rpath: the Makefiles export `LD_LIBRARY_PATH` (own `lib/`
-plus the site-tree `libqmap` that carries the kernel approximation flag).
-Until `libqmap` is reinstalled system-wide with the extension, consumers
-link `-L<site>/external/libqmap/lib` and run with the same path prefix.
+plus the site-tree `libcorm` that carries the kernel approximation flag).
+Until `libcorm` is reinstalled system-wide with the extension, consumers
+link `-L<site>/external/libcorm/lib` and run with the same path prefix.
 
 ## Limitations
 

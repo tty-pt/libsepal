@@ -1,4 +1,4 @@
 # LeakSanitizer suppressions (same story as valgrind.supp):
-# qmap_open() pushes the handle onto a per-file kernel id registry that the
+# corm_open() pushes the handle onto a per-file kernel id registry that the
 # kernel never drains in-process. Not a libsepal allocation.
 leak:ids_push

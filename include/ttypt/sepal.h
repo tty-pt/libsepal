@@ -3,7 +3,7 @@
  *
  * A dim-tagged vector store with a two-stage ANN pipeline: Hamming prefilter
  * over a sign-bit sketch (top-m) followed by exact cosine rerank (top-k).
- * Built on the qmap persistent map and the recall kernel (rec.h). Follows the
+ * Built on the corm persistent map and the recall kernel (rec.h). Follows the
  * same standard as libjoint / libislet / libstoma (mk stack, ttypt headers).
  *
  * DESIGN CONTRACT
@@ -38,7 +38,7 @@ extern "C" {
 /** m knob default: 10x k when m==0 (capped at the store size). */
 #define SEPAL_M_DEFAULT 10
 
-/** Opaque vector store handle (qmap-backed; memory-only when opened NULL). */
+/** Opaque vector store handle (corm-backed; memory-only when opened NULL). */
 typedef struct sepal_vecstore sepal_vecstore_t;
 
 /** A search hit: (ref, cosine score). */
@@ -53,7 +53,7 @@ typedef struct sepal_hit {
  *    map per file). fname == NULL -> memory-only store. err (may be NULL)
  *    receives 0 on success, -1 on open/create failure, -2 on memory or
  *    type-registration failure.
- *  - sepal_close persists via qmap_save() and never calls qmap_close():
+ *  - sepal_close persists via corm_save() and never calls corm_close():
  *    closing truncates the file to 0 (the same no-close invariant as mm).
  *    After sepal_close the store must not be used.
  * `--------------------------------------------------------------------- */
@@ -62,7 +62,7 @@ void              sepal_close(sepal_vecstore_t *vs);
 
 /*
  * rec_axis_open (RECALL-KERNEL.md "rec_axis_open convention", optional CLI-open convention,
- * not part of libqmap's core rec_query registry API): opens a sepal
+ * not part of libcorm's core rec_query registry API): opens a sepal
  * store from an opaque spec string (the sepal_open() fname, or
  * empty/NULL for a memory-only store) and returns the ctx a caller then
  * passes to rec_axis_set_ctx() -- the sepal_vecstore_t* directly, NULL
@@ -72,11 +72,11 @@ void *rec_axis_open(const char *spec);
 
 /*
  * rec_axis_env_config (RECALL-KERNEL.md "rec_axis_env_config convention",
- * optional CLI-open convention — not libqmap core API): invoked by the
- * qmap CLI once per bound plugin (after rec_axis_open/rec_axis_set_ctx).
- * Configuration is env-only (D8): when BOTH QMAP_SEPAL_EMBED_URL and
- * QMAP_SEPAL_EMBED_MODEL are set, configure the embedder from them
- * (optional QMAP_SEPAL_EMBED_KEY); otherwise sepal stays unconfigured,
+ * optional CLI-open convention — not libcorm core API): invoked by the
+ * corm CLI once per bound plugin (after rec_axis_open/rec_axis_set_ctx).
+ * Configuration is env-only (D8): when BOTH CORM_SEPAL_EMBED_URL and
+ * CORM_SEPAL_EMBED_MODEL are set, configure the embedder from them
+ * (optional CORM_SEPAL_EMBED_KEY); otherwise sepal stays unconfigured,
  * exactly the offline floats-direct default. Credentials never touch
  * spec/filespec/roster/disk — they exist only in the invoking env.
  * Returns 0; a missing/unusable pair leaves sepal unconfigured (the
@@ -115,7 +115,7 @@ int sepal_configure_embeddings(const char *url, const char *model,
 /* ---------------------------------------------------------------------.
  *  rec_axis_store / rec_axis_unstore / rec_axis_readback conventional
  *  exports (RECALL-KERNEL.md / mm-plan PHASE-2-CLI.md §2A, optional
- *  CLI-specific — not libqmap core API). The consumer passes (ref, value)
+ *  CLI-specific — not libcorm core API). The consumer passes (ref, value)
  *  blindly; sepal parses the WHOLE value string in its own grammar:
  *
  *    "f1,f2,…"             comma floats (dim = token count, 1..SEPAL_VEC_MAX)
@@ -192,7 +192,7 @@ int sepal_sketch(const float *v, size_t n, uint64_t *words, size_t nwords);
  *    contain spaces — stoma `query=` parity. Decode returns NULL on
  *    missing/unreadable file, missing qdim, empty query with no file,
  *    unconfigured embedder, fetch failure, or bad dims; the CLI then
- *    fails the query loud via qmap_expr_error, never silent-empty.) */
+ *    fails the query loud via corm_expr_error, never silent-empty.) */
 size_t sepal_search(sepal_vecstore_t *vs, const float *q, size_t qdim,
                     size_t k, float min_sim, size_t m, sepal_hit_t *out);
 

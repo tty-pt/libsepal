@@ -2,7 +2,7 @@
 
 Build: `make -C ..` first (builds `lib/libsepal.so`), then `make` here.
 Run: `make run` (needs the `LD_LIBRARY_PATH` the Makefile exports: the
-repo's own `lib/` plus the site-tree `libqmap` carrying the kernel
+repo's own `lib/` plus the site-tree `libcorm` carrying the kernel
 approximation flag).
 
 | Example        | Shows                                                        |

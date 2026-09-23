@@ -1,11 +1,11 @@
 all := libsepal
 
-LDLIBS-libsepal := -lqsys -lqmap -lxxhash -lm
-LDFLAGS-libsepal := -L/home/quirinpa/site/external/libqmap/lib
+LDLIBS-libsepal := -lqsys -lcorm -lxxhash -lm
+LDFLAGS-libsepal := -L/home/quirinpa/site/external/libcorm/lib
 
 CFLAGS := -g
 CFLAGS += -O3
-CFLAGS += -I/home/quirinpa/site/external/libqmap/include
+CFLAGS += -I/home/quirinpa/site/external/libcorm/include
 
 CFLAGS-x86_64 := -mpopcnt -mavx2 -mfma
 CFLAGS-amd64 := -mpopcnt -mavx2 -mfma

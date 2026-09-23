@@ -6,5 +6,5 @@ includedir=${prefix}/include
 Name: sepallib
 Description: Semantic (meaning) axis vector store — ANN search for the recall kernel
 Version: 0.1.0
-Libs: -L${libdir} -lsepal -lqsys -lqmap
+Libs: -L${libdir} -lsepal -lqsys -lcorm
 Cflags: -I${includedir}/ttypt

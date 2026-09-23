@@ -2,14 +2,14 @@
  * test_embed_cache.c — L2 query-embed cache (AXIS-EFF plan): the on-disk
  * (model, text) cache around sepal_embed_fetch. Offline via the same
  * canned-vector stub as test_axis_decode_query.c; the cache dir comes from
- * the QMAP_SEPAL_EMBED_CACHE_DIR env override so this test never depends
+ * the CORM_SEPAL_EMBED_CACHE_DIR env override so this test never depends
  * on rec_axis_open path parsing.
  *
  * Behaviors pinned:
  *   - miss → live fetch (stub counted); 2nd identical query → cache hit,
  *     fetch NOT called (call count unchanged).
  *   - different text → miss again; different model → miss again.
- *   - QMAP_SEPAL_EMBED_CACHE=0 → cache bypassed (every decode fetches).
+ *   - CORM_SEPAL_EMBED_CACHE=0 → cache bypassed (every decode fetches).
  *   - unconfigured embedder → NULL, cache + fetch untouched.
  *   - corrupt cache file → graceful miss (fetch each time, never crash),
  *     and a garbage prefix keeps later valid records unreachable (scanner
@@ -76,8 +76,8 @@ static char cache_path[96];
 static void
 cache_on(void)
 {
-	ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_CACHE_DIR", cache_dir, 1), 0);
-	ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_CACHE"), 0);
+	ASSERT_EQ(qsys_setenv("CORM_SEPAL_EMBED_CACHE_DIR", cache_dir, 1), 0);
+	ASSERT_EQ(qsys_unsetenv("CORM_SEPAL_EMBED_CACHE"), 0);
 	/* cache_dir only lands in the cfg when rec_axis_env_config() runs, so
 	 * re-apply after the env is in place. */
 	ASSERT_EQ(rec_axis_env_config(), 0);
@@ -86,7 +86,7 @@ cache_on(void)
 static void
 cache_off(void)
 {
-	ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_CACHE", "0", 1), 0);
+	ASSERT_EQ(qsys_setenv("CORM_SEPAL_EMBED_CACHE", "0", 1), 0);
 }
 
 /* cache_dir is populated only by rec_axis_env_config / rec_axis_open —
@@ -97,11 +97,11 @@ static void
 config_embed(const char *model)
 {
 	ASSERT_EQ(sepal_configure_embeddings(NULL, NULL, NULL), 0);
-	ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_URL", "http://localhost:9/none", 1), 0);
+	ASSERT_EQ(qsys_setenv("CORM_SEPAL_EMBED_URL", "http://localhost:9/none", 1), 0);
 	if (model)
-		ASSERT_EQ(qsys_setenv("QMAP_SEPAL_EMBED_MODEL", model, 1), 0);
+		ASSERT_EQ(qsys_setenv("CORM_SEPAL_EMBED_MODEL", model, 1), 0);
 	else
-		ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_MODEL"), 0);
+		ASSERT_EQ(qsys_unsetenv("CORM_SEPAL_EMBED_MODEL"), 0);
 	ASSERT_EQ(rec_axis_env_config(), 0);
 }
 
@@ -109,8 +109,8 @@ static void
 config_unconfigured(void)
 {
 	ASSERT_EQ(sepal_configure_embeddings(NULL, NULL, NULL), 0);
-	ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_URL"), 0);
-	ASSERT_EQ(qsys_unsetenv("QMAP_SEPAL_EMBED_MODEL"), 0);
+	ASSERT_EQ(qsys_unsetenv("CORM_SEPAL_EMBED_URL"), 0);
+	ASSERT_EQ(qsys_unsetenv("CORM_SEPAL_EMBED_MODEL"), 0);
 	ASSERT_EQ(rec_axis_env_config(), 0);
 }
 
@@ -177,7 +177,7 @@ test_cache_new_text_and_model_miss(void)
 static void
 test_cache_env_optout(void)
 {
-	printf("=== cache: QMAP_SEPAL_EMBED_CACHE=0 bypasses the cache ===\n");
+	printf("=== cache: CORM_SEPAL_EMBED_CACHE=0 bypasses the cache ===\n");
 	int slot = find_sepal_slot();
 	ASSERT(slot >= 0, "sepal axis registered");
 	config_embed("cache-model");
@@ -247,9 +247,9 @@ test_cache_oversized(void)
 	config_unconfigured();
 }
 
-/* ── D14 axis-contributed CLI options (external dilemma: the qmap CLI
+/* ── D14 axis-contributed CLI options (external dilemma: the corm CLI
  *    broadcasts --query / --min-sim to every bound axis declaring them).
- *    The convention symbols are dlsym'd by qmap; the tests call them
+ *    The convention symbols are dlsym'd by corm; the tests call them
  *    directly through the shared lib, exactly like rec_axis_env_config. ── */
 
 extern int rec_axis_config_arg(const char *name, const char *value);
@@ -299,7 +299,7 @@ test_cli_options(void)
 
 	/* bare-leaf CLI fallback: --query + NULL spec embeds the CLI text.
 	 * The expression evaluator calls axis->decode(n->value) directly
-	 * (qmap.c), so a bare `sepal` leaf reaches the plugin as NULL (the
+	 * (corm.c), so a bare `sepal` leaf reaches the plugin as NULL (the
 	 * rec_axis_decode() wrapper rejects NULL specs by contract). */
 	ASSERT_EQ(rec_axis_config_arg("query", "south pier lamp"), 0);
 	void *p = rec_axis_get(slot)->decode(NULL);

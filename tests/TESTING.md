@@ -8,9 +8,9 @@ descends into `tests/` only for the `test:`/`bench:` targets). If you work
 inside `tests/` directly, run `make -C ..` once to build `lib/sepal.so`.
 
 The binaries have no rpath: the Makefile exports `LD_LIBRARY_PATH` (its own
-`lib/` plus the site-tree `libqmap` that carries the kernel approximation
-flag). Everything here assumes the site `external/libqmap` kernel extension
-has been built (`make` in `/home/quirinpa/site/external/libqmap`).
+`lib/` plus the site-tree `libcorm` that carries the kernel approximation
+flag). Everything here assumes the site `external/libcorm` kernel extension
+has been built (`make` in `/home/quirinpa/site/external/libcorm`).
 
 ## Tiers
 

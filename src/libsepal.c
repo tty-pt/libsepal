@@ -4,13 +4,13 @@
  * Dim-tagged vector store + two-stage ANN search (Hamming prefilter over a
  * sign-bit sketch, exact-cosine rerank) + recall-kernel adapters.
  * See include/ttypt/sepal.h for the design contract and VEC1 blob format.
- * Persistence follows the mm invariant: sepal_close() calls qmap_save();
- * qmap_close() is never used (it would truncate the file to 0).
+ * Persistence follows the mm invariant: sepal_close() calls corm_save();
+ * corm_close() is never used (it would truncate the file to 0).
  */
 
 #include "../include/ttypt/sepal.h"
 
-#include <ttypt/qmap.h>
+#include <ttypt/corm.h>
 #include <ttypt/qsys.h>
 
 #include <errno.h>
@@ -175,10 +175,10 @@ struct sepal_vecstore {
 	size_t   hmcap;
 };
 
-static uint32_t sepal_kt = QM_MISS;
-static uint32_t sepal_vt = QM_MISS;
+static uint32_t sepal_kt = CM_MISS;
+static uint32_t sepal_vt = CM_MISS;
 
-/* ---------- flat index: ref->row slot map (XXH32 keyed like qmap) ------ */
+/* ---------- flat index: ref->row slot map (XXH32 keyed like corm) ------ */
 
 #define SLOT_SEED 0xD15EA5E1U
 
@@ -381,10 +381,10 @@ blob_measure(const void *data)
 static void
 sepal_register_types(void)
 {
-	if (sepal_kt != QM_MISS)
+	if (sepal_kt != CM_MISS)
 		return;
-	sepal_kt = qmap_reg(sizeof(rec_ref_t));
-	sepal_vt = qmap_mreg(blob_measure);
+	sepal_kt = corm_reg(sizeof(rec_ref_t));
+	sepal_vt = corm_mreg(blob_measure);
 }
 
 sepal_vecstore_t *
@@ -398,8 +398,8 @@ sepal_open(const char *fname, int *err)
 		e = -2;
 		goto out;
 	}
-	uint32_t hd = qmap_open(fname, NULL, sepal_kt, sepal_vt, 0xFF, 0);
-	if (hd == QM_MISS) {
+	uint32_t hd = corm_open(fname, NULL, sepal_kt, sepal_vt, 0xFF, 0);
+	if (hd == CM_MISS) {
 		free(vs);
 		vs = NULL;
 		e = -1;
@@ -412,9 +412,9 @@ vs->idx_valid = 1;
  * every valid blob into the flat search index (atomicity: any unparsable
  * row disables the index → searches fall back to the map walk) */
 {
-	uint32_t cur = qmap_iter(hd, NULL, 0);
+	uint32_t cur = corm_iter(hd, NULL, 0);
 	const void *k, *v;
-	while (qmap_next(&k, &v, cur)) {
+	while (corm_next(&k, &v, cur)) {
 		sepal_blob_hdr_t h;
 		vs->n++;
 		if (!vs->idx_valid)
@@ -431,7 +431,7 @@ vs->idx_valid = 1;
 			vs->idx_valid = 0;
 		}
 	}
-	qmap_fin(cur);
+	corm_fin(cur);
 }
 out:
 	if (err)
@@ -445,7 +445,7 @@ sepal_close(sepal_vecstore_t *vs)
 	if (!vs)
 		return;
 	idx_free(vs);
-	qmap_save();   /* persist; never qmap_close (truncates the file to 0) */
+	corm_save();   /* persist; never corm_close (truncates the file to 0) */
 	free(vs);
 }
 
@@ -465,14 +465,14 @@ sepal_put(sepal_vecstore_t *vs, rec_ref_t ref, const float *v, size_t full_dim)
 		free(buf);
 		return -1;
 	}
-	int was_present = qmap_count(vs->hd, &ref) > 0;
+	int was_present = corm_count(vs->hd, &ref) > 0;
 	if (was_present)
-		qmap_del(vs->hd, &ref);
-	/* NOTE: qmap_put's position return is not inspected — mm ignores it
+		corm_del(vs->hd, &ref);
+	/* NOTE: corm_put's position return is not inspected — mm ignores it
 	 * too, since a put can land on position 0 legitimately. Presence is
 	 * verified below instead. */
-	qmap_put(vs->hd, &ref, buf);
-	if (qmap_count(vs->hd, &ref) == 0) {
+	corm_put(vs->hd, &ref, buf);
+	if (corm_count(vs->hd, &ref) == 0) {
 		free(buf);
 		return -1;
 	}
@@ -516,9 +516,9 @@ sepal_del(sepal_vecstore_t *vs, rec_ref_t ref)
 {
 	if (!vs)
 		return -1;
-	if (qmap_count(vs->hd, &ref) == 0)
+	if (corm_count(vs->hd, &ref) == 0)
 		return -1;
-	qmap_del(vs->hd, &ref);
+	corm_del(vs->hd, &ref);
 	vs->n--;
 	if (vs->idx_valid) {
 		uint32_t row;
@@ -547,7 +547,7 @@ lookup_blob(sepal_vecstore_t *vs, rec_ref_t ref, sepal_blob_hdr_t *hdr)
 {
 	if (!vs)
 		return NULL;
-	const void *b = qmap_get(vs->hd, &ref);
+	const void *b = corm_get(vs->hd, &ref);
 	if (!b)
 		return NULL;
 	if (blob_parse(b, (size_t)1 << 30, hdr) != 0)
@@ -851,9 +851,9 @@ prefilter(sepal_vecstore_t *vs, const float *q, size_t qdim,
 		return -1;
 
 	if (!vs->idx_valid) {
-		uint32_t cur = qmap_iter(vs->hd, NULL, 0);
+		uint32_t cur = corm_iter(vs->hd, NULL, 0);
 		const void *k, *v;
-		while (qmap_next(&k, &v, cur)) {
+		while (corm_next(&k, &v, cur)) {
 			sepal_blob_hdr_t h;
 			if (blob_parse(v, (size_t)1 << 30, &h) != 0)
 				continue;
@@ -865,7 +865,7 @@ prefilter(sepal_vecstore_t *vs, const float *q, size_t qdim,
 			memcpy(&ref, k, sizeof(ref));
 			heap_push(hp, (uint32_t)hd, ref);
 		}
-		qmap_fin(cur);
+		corm_fin(cur);
 		return 0;
 	}
 
@@ -1012,7 +1012,7 @@ static struct sepal_embed_cfg {
 	char *cache_dir;  /* query-embed cache location (store dir or env) */
 } sepal_embed_cfg;
 
-/* D14 axis-contributed CLI options: the qmap CLI broadcasts inline
+/* D14 axis-contributed CLI options: the corm CLI broadcasts inline
  * `--query=…` / `--file=…` / `--qdim=…` / `--min-sim=…` / `--m=…` to
  * every bound axis declaring them. Leaf specs win over this (spec > CLI);
  * credentials never ride argv (env-only, rec_axis_env_config). Freed on
@@ -1037,7 +1037,7 @@ __attribute__((weak)) int sepal_embed_fetch(const char *text,
 
 /* L2 query-embed cache (AXIS-EFF plan): best-effort, on-disk, keyed by
  * (model, text). Enabled when a cache dir exists unless
- * QMAP_SEPAL_EMBED_CACHE=0; hits return a caller-freed vector. */
+ * CORM_SEPAL_EMBED_CACHE=0; hits return a caller-freed vector. */
 static int embed_cache_enabled(void);
 static float *embed_cache_get(const char *model, const char *text,
                               size_t *n_out);
@@ -1262,7 +1262,7 @@ static void *sepal_axis_decode(const char *s)
 static int
 embed_cache_enabled(void)
 {
-	const char *off = getenv("QMAP_SEPAL_EMBED_CACHE");
+	const char *off = getenv("CORM_SEPAL_EMBED_CACHE");
 
 	if (off && !strcmp(off, "0"))
 		return 0;
@@ -1440,7 +1440,7 @@ __attribute__((constructor)) static void sepal_rec_axis_init(void)
 
 /*
  * rec_axis_open convention (RECALL-KERNEL.md "rec_axis_open convention", optional CLI-open
- * convention, not part of libqmap's core rec_query registry API): spec
+ * convention, not part of libcorm's core rec_query registry API): spec
  * is the sepal_open() fname, or empty/NULL for a memory-only store.
  * Returns the sepal_vecstore_t* ctx directly (no cast needed, unlike
  * the joint/islet handle-widening axes) -- NULL on open failure.
@@ -1469,22 +1469,22 @@ void *rec_axis_open(const char *spec)
 
 /*
  * rec_axis_env_config convention (RECALL-KERNEL.md "rec_axis_env_config
- * convention", optional CLI-open — not libqmap core API): called by the
- * qmap CLI once per bound plugin, right after rec_axis_set_ctx. Pure
- * env configuration (D8) — QMAP_SEPAL_EMBED_URL + QMAP_SEPAL_EMBED_MODEL
- * (both required) with optional QMAP_SEPAL_EMBED_KEY configure the
+ * convention", optional CLI-open — not libcorm core API): called by the
+ * corm CLI once per bound plugin, right after rec_axis_set_ctx. Pure
+ * env configuration (D8) — CORM_SEPAL_EMBED_URL + CORM_SEPAL_EMBED_MODEL
+ * (both required) with optional CORM_SEPAL_EMBED_KEY configure the
  * embedder; anything else leaves sepal unconfigured (the offline
  * floats-direct default). Credentials live only in the invoking env.
  */
 int rec_axis_env_config(void)
 {
-	const char *url = getenv("QMAP_SEPAL_EMBED_URL");
-	const char *model = getenv("QMAP_SEPAL_EMBED_MODEL");
-	const char *key = getenv("QMAP_SEPAL_EMBED_KEY");
-	const char *cdir = getenv("QMAP_SEPAL_EMBED_CACHE_DIR");
+	const char *url = getenv("CORM_SEPAL_EMBED_URL");
+	const char *model = getenv("CORM_SEPAL_EMBED_MODEL");
+	const char *key = getenv("CORM_SEPAL_EMBED_KEY");
+	const char *cdir = getenv("CORM_SEPAL_EMBED_CACHE_DIR");
 
 	/* L2: optional explicit cache dir overrides the store-derived one.
-	 * The disable opt-out (QMAP_SEPAL_EMBED_CACHE=0) is read live at
+	 * The disable opt-out (CORM_SEPAL_EMBED_CACHE=0) is read live at
 	 * each decode, so it needs no state here. */
 	if (cdir && *cdir) {
 		char *copy = strdup(cdir);
@@ -1496,14 +1496,14 @@ int rec_axis_env_config(void)
 	if (!url || !model)
 		return 0;               /* unconfigured: offline floats-direct */
 	if (sepal_configure_embeddings(url, model, key) != 0)
-		fprintf(stderr, "sepal: inconsistent QMAP_SEPAL_EMBED_* pair; "
+		fprintf(stderr, "sepal: inconsistent CORM_SEPAL_EMBED_* pair; "
 				"stays unconfigured\n");
 	return 0;
 }
 
 /*
  * rec_axis_cli_options / rec_axis_config_arg conventions (D14: optional
- * axis-contributed CLI options — not libqmap core API): qmap collects
+ * axis-contributed CLI options — not libcorm core API): corm collects
  * inline `--name=value` tokens and, once every bound axis is connected,
  * broadcasts each to the declarations via these dlsym'd symbols. sepal
  * declares `query` (full-sentence embed text) and `min-sim` (score floor);
@@ -1570,7 +1570,7 @@ rec_axis_config_arg(const char *name, const char *value)
 /* ----------------------------------------------------------------------.
  * rec_axis_store / rec_axis_unstore / rec_axis_readback (Phase 2A
  * store contract, RECALL-KERNEL.md "rec_axis_store convention", optional
- * CLI-specific — not libqmap core API). The consumer passes (ref, value)
+ * CLI-specific — not libcorm core API). The consumer passes (ref, value)
  * blindly; sepal parses the WHOLE value string in its own grammar:
  *   "f1,f2,…"  comma floats (dim = token count, 1..SEPAL_VEC_MAX) → direct
  *   else       → embedded via the configured embedder, or EINVAL.      */

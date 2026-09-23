@@ -34,7 +34,7 @@ main(int argc, char **argv)
 	size_t d = sepal_get(vs, 0, got, sizeof(got) / sizeof(got[0]));
 	printf("ref 0: dim=%zu full=%zu\n", d, sepal_full_dim(vs, 0));
 
-	sepal_close(vs);   /* persists via qmap_save(); never qmap_close() */
+	sepal_close(vs);   /* persists via corm_save(); never corm_close() */
 	printf("closed (re-run to see the vectors survive)\n");
 	return 0;
 }

@@ -11,9 +11,9 @@ jobs:
     with:
       name: libsepal
       publish_to: "deb,apk,rpm,brew,openbsd,winget"
-      deps: "libqmap"
+      deps: "libcorm"
       deps_winget: "mingw-w64-x86_64-xxhash"
-      deps_winget_tty: "libqsys,libqmap"
+      deps_winget_tty: "libqsys,libcorm"
     secrets:
       HOST: ${{ secrets.OPENBSD_HOST }}
       USER: ${{ secrets.OPENBSD_USER }}

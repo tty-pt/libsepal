@@ -3,9 +3,9 @@
  *
  * Self-exec'ing harness: the orchestrator (no argv) fork+exec's itself one
  * phase at a time — seed, verify1, unstore, verify2. Every phase is a fresh
- * process, so "reopen" really reads what the previous phase's qmap_save()
- * (plus libqmap's exit destructor) flushed to disk; nothing is ever
- * qmap_close'd (no-close invariant). Proves the sepal blob store round-trips
+ * process, so "reopen" really reads what the previous phase's corm_save()
+ * (plus libcorm's exit destructor) flushed to disk; nothing is ever
+ * corm_close'd (no-close invariant). Proves the sepal blob store round-trips
  * through its documented file-backed lifecycle:
  *
  *   seed     → rec_axis_store(1, "0.5,-0.25,0.75") and (2, "1.0,2.0,3.0")
@@ -23,7 +23,7 @@
 #include <unistd.h>
 #include <errno.h>
 
-#include <ttypt/qmap.h>
+#include <ttypt/corm.h>
 
 #define DB_PATH "/tmp/test_sepal_roundtrip.db"
 
@@ -55,7 +55,7 @@ phase_seed(void)
 		return 1;
 	if (sepal_n(vs) != 2)
 		return 1;
-	qmap_save();
+	corm_save();
 	return 0;
 }
 
@@ -92,7 +92,7 @@ phase_unstore(void)
 		return 1;
 	if (sepal_n(vs) != 1)              /* isolation: ref 2 kept */
 		return 1;
-	qmap_save();
+	corm_save();
 	return 0;
 }
 
