@@ -1,0 +1,1 @@
+CFLAGS-libsepal-o := -fPIC
