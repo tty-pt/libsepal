@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0
+
+- **First stable release** — semantic (meaning) axis vector store for the recall kernel: store float vectors with per-blob dimensions and query by meaning.
+- **Dim-tagged VEC1 blobs**: each vector stores its own exact-stage dim (`min(full_dim, 256)` matryoshka prefix) and a full-dim sign sketch — 1,136 bytes at 768/256 instead of ~7 KB of text. `sepal_blob_len`/`sepal_blob_hdr`/`sepal_blob_put` expose the format; garbage/truncation always decodes to 0, never a misread.
+- **Two-stage ANN search**: Hamming popcount prefilter over the sign sketch picks the top-`m` candidates (`m` = 10×`k` by default, capped at N), then an exact cosine rerank keeps the best-`k`; `min_sim` filter at rerank. `sepal_search` returns hits best-first with ties by ascending ref.
+- **Recall-kernel adapters**: `sepal_fill_approx` streams top-`m` refs into a sealed `rec_set_t` marked `REC_SET_APPROX` with an owed recall bound (`m/n`, propagated by the kernel extension); `sepal_rank` (a `rec_score_fn`) scores one ref exactly. Phase 2A store half lands too — `rec_axis_store`/`rec_axis_unstore`/`rec_axis_readback` (store is keyed by ref, replace-in-place; `unstore` normalizes absent → 0) and `rec_axis_open` (file path spec, or empty → memory-only store).
+- **File persistence**: optional libcorm sidecar; `sepal_close` saves (never closes — the file would truncate to 0), the vector count is restored on open. `sepal_index_validate` checks internal consistency.
+- **Performance**: flat sketch index (L2-resident at N=10k, ~3× faster prefilter), frozen-norm fused-dot rerank (semantically `sepal_cosine` within 1e-6), AVX2 fast paths (`vmovmskps` sign bits, XOR→nibble-LUT popcount, FMA cosine) with a scalar fallback. Vs the pre-AVX2 shipped config: total search 2.9×/4.3× faster at 384/768 dim.
+- **API**: `sepal_open`/`sepal_close`/`sepal_put`/`sepal_del`/`sepal_get`/`sepal_dim`/`sepal_full_dim`/`sepal_n`, `sepal_cosine`, `sepal_sketch`, `sepal_search`, `sepal_configure_embeddings` (set the embedding dim at runtime), plus the kernel adapters. Caller-opaque `rec_ref_t` (u32) refs — the store never maps refs to schemas.
+- Depends on `libcorm` for the recall-kernel approximation flag.
+
 ## [0.3.0] - 2026-09-15
 - SIMD/opt tier (SEPAL-PERF, post-collapse): T0 compiler flags applied for
   real + hand-written AVX2 lanes in both hot paths; besides `-O3` this is
