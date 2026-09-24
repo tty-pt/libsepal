@@ -1,4 +1,9 @@
 # libsepal
+
+[![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
+[![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
+[![semantic-ANN](https://img.shields.io/badge/semantic-ANN-FF6B35)](#)
+
 > Semantic (meaning) axis vector store — two-stage ANN search for the recall kernel.
 
 Store float vectors with per-blob dimensions, then query by meaning: a
@@ -7,7 +12,21 @@ cosine rerank keeps the best-k. Kernel-form adapters (`sepal_fill_approx`,
 `sepal_rank`) plug the meaning axis straight into `rec_set_t` joins, and the
 fill declares its approximate-ness so downstream recall stays honest.
 
-## Key Features
+## Contents
+
+- [Features](#features)
+- [Install](#install)
+- [Build from source](#build-from-source)
+- [Quickstart](#quickstart)
+- [VEC1 blob format](#vec1-blob-format)
+- [API overview](#api-overview)
+- [Performance](#performance)
+- [Limitations](#limitations)
+- [Documentation](#documentation)
+- [Testing](#testing)
+- [License](#license)
+
+## Features
 
 - **Dim-tagged blobs (VEC1)**: every vector stores its own exact-stage dim
   (`min(full_dim, 256)` matryoshka prefix) and a full-dim sign sketch —
@@ -35,7 +54,36 @@ fill declares its approximate-ness so downstream recall stays honest.
 - **Caller-opaque refs**: refs are `rec_ref_t` (u32) passed at put time;
   the store never maps refs to schemas
 
-## Quick Start
+## Install
+
+Prebuilt packages are distributed on tty.pt for Linux (APT / Alpine / Arch /
+Fedora-RHEL), macOS (Homebrew), Windows (winget / MSYS2), and OpenBSD.
+Follow the [installation instructions](
+https://github.com/tty-pt/ci/blob/main/docs/install.md) and use
+**libsepal** as the package name.
+
+## Build from source
+
+The library builds with a plain `make` (the shared [`mk` include.mk](
+https://github.com/tty-pt/mk)):
+
+```sh
+make                  # builds lib/libsepal.so
+make test             # run the in-tree test suite
+sudo make install     # lib + headers + sepal.pc -> $(PREFIX), default /usr/local
+```
+
+Link it from your own C code:
+
+```sh
+cc my_app.c $(pkg-config --cflags --libs sepal)
+```
+
+**Dependencies:** `libcorm`, `libqsys`, `libxxhash`. The build expects
+`../mk` and, until `libcorm` is reinstalled system-wide with the kernel
+approximation flag, a site-tree `libcorm`.
+
+## Quickstart
 
 ```c
 #include <ttypt/sepal.h>
@@ -76,7 +124,9 @@ total 16+8W+4·dim → 1,136 B at 768/256
 format; garbage, truncation, wrong magic/version, or inconsistent fields
 always decode to 0 — never a misread.
 
-## API (see `include/ttypt/sepal.h` for the contract)
+## API overview
+
+The contract lives in `include/ttypt/sepal.h`.
 
 Store: `sepal_open` / `sepal_close` / `sepal_put` / `sepal_del` /
 `sepal_get` (never truncates: over-max → full dim, under-max → 0) /
@@ -104,20 +154,6 @@ at N=10000 are the reliable row. Vs the pre-AVX2 shipped config (bisect D):
 prefilter 3.3×/4.4×, rerank 1.44×/1.63×, total 2.9×/4.3× faster at
 384/768 dim. Recall columns are unchanged by every tier (D1 semantic rule).
 
-## Building & testing
-
-```sh
-make          # builds lib/libsepal.so (needs ../mk + the site-tree libcorm)
-make test     # unit + integration + property + stress (see tests/TESTING.md)
-make bench    # two-stage vs brute force (records study §12.4)
-make -C tests valgrind | asan | ubsan
-```
-
-Binaries carry no rpath: the Makefiles export `LD_LIBRARY_PATH` (own `lib/`
-plus the site-tree `libcorm` that carries the kernel approximation flag).
-Until `libcorm` is reinstalled system-wide with the extension, consumers
-link `-L<site>/external/libcorm/lib` and run with the same path prefix.
-
 ## Limitations
 
 - Exact brute force is a test-side reference, not a library feature —
@@ -129,3 +165,21 @@ link `-L<site>/external/libcorm/lib` and run with the same path prefix.
   a store-wide config; no per-store dim override in 0.1.0.
 - Norm is frozen at put: mutating floats in place is not supported —
   re-put the ref instead.
+
+## Documentation
+
+- [examples/README.md](./examples/README.md) — runnable examples
+- [tests/TESTING.md](./tests/TESTING.md) — test layout
+- [CHANGELOG.md](./CHANGELOG.md) — version history
+- [include/ttypt/sepal.h](./include/ttypt/sepal.h) — full API contract
+
+## Testing
+
+```sh
+make test      # unit + integration + property + stress (see tests/TESTING.md)
+make -C tests valgrind | asan | ubsan
+```
+
+## License
+
+BSD 2-Clause License. Copyright (c) 2025, tty-pt. See `LICENSE`.
