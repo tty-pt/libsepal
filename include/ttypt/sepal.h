@@ -1,5 +1,9 @@
-/*
- * sepal.h — libsepal, the meaning (semantic) axis.
+#ifndef TTYPT_SEPAL_H
+#define TTYPT_SEPAL_H
+
+/**
+ * @file sepal.h
+ * @brief libsepal — the meaning (semantic) axis.
  *
  * A dim-tagged vector store with a two-stage ANN pipeline: Hamming prefilter
  * over a sign-bit sketch (top-m) followed by exact cosine rerank (top-k).
@@ -18,9 +22,6 @@
  *    reference and is NOT provided by the library (exactness is a kernel
  *    property, not a sepal feature).
  */
-#ifndef TTYPT_SEPAL_H
-#define TTYPT_SEPAL_H
-
 #include <stddef.h>
 #include <stdint.h>
 #include <ttypt/rec.h>
