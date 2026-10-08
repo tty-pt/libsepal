@@ -1,7 +1,6 @@
 all := libsepal
 
 LDLIBS-libsepal := -lqsys -lcorm -lxxhash -lm
-LDFLAGS-libsepal := -L/home/quirinpa/site/external/libcorm/lib
 
 CFLAGS := -g
 CFLAGS += -O3

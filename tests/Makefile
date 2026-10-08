@@ -2,10 +2,10 @@
 
 CC = cc
 CFLAGS = -g -Wall -Wextra -Wno-unused-function -I../include -I/home/quirinpa/site/external/libqmap/include
-LDFLAGS = -L../lib -L/home/quirinpa/site/external/libqmap/lib -L/usr/lib
+LDFLAGS = -L../lib -L/usr/lib
 LDLIBS = -lsepal -lqmap -lqsys -lxxhash -lm
 
-export LD_LIBRARY_PATH := $(abspath ../lib):/home/quirinpa/site/external/libqmap/lib:$(LD_LIBRARY_PATH)
+export LD_LIBRARY_PATH := $(abspath ../lib):$(LD_LIBRARY_PATH)
 
 # Test directories
 UNIT_DIR = unit
