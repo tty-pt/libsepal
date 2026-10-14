@@ -1,10 +1,15 @@
+<p align="center">
+  <img src="assets/logo.png" alt="libsepal logo" width="220" />
+</p>
+
 # libsepal
 
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![semantic-ANN](https://img.shields.io/badge/semantic-ANN-FF6B35)](#)
+[![Recall Kernel Meaning Axis](https://img.shields.io/badge/axis-meaning-blueviolet)](#)
 
-> Semantic (meaning) axis vector store — two-stage ANN search for the recall kernel.
+> Semantic vector store with two-stage ANN search (Hamming sketch prefilter + exact cosine rerank) and recall kernel meaning axis.
 
 Store float vectors with per-blob dimensions, then query by meaning: a
 Hamming prefilter over a sign-bit sketch picks the top-m candidates, an exact
