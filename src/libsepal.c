@@ -1091,7 +1091,7 @@ static int sepal_axis_rank(void *ctx, void *params, rec_ref_t ref, float *score)
  * leaf-spec alias `min_sim` (both map to the same field). A non-empty
  * `query` embeds the string server-side through the configured embedder
  * (full-dim vector) and wins over `file=`; single-quoted values may
- * contain spaces (stoma `query=` parity, lenient on unterminated quote).
+ * contain spaces (lemma `query=` parity, lenient on unterminated quote).
  * NULL on missing/unreadable file, missing qdim, empty query with no
  * file, or — for the query path — unconfigured embedder, fetch failure,
  * or bad dims.
@@ -1870,6 +1870,8 @@ static char *
 sepal_embed_body(const char *model, const char *text)
 {
 	size_t ml = strlen(model), tl = strlen(text), i, cap, used;
+	if (tl > 512)
+		tl = 512;
 	char *b = malloc(ml + tl * 2 + 64);
 
 	if (!b)

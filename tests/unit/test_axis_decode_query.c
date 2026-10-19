@@ -2,7 +2,7 @@
  * test_axis_decode_query.c — Phase 6: sepal query-time `query=` leaf.
  *
  * `sepal="query='hello world' m=10 min_sim=0.2"` embeds the string
- * server-side in sepal_axis_decode (stoma single-quote parity) instead of
+ * server-side in sepal_axis_decode (lemma single-quote parity) instead of
  * the pi-mm curl→tempfile→`file=` bridge. Precedence: non-empty `query`
  * wins over `file=`; empty query + no file → NULL; unconfigured embedder
  * → NULL without calling fetch.

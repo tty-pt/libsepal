@@ -8,7 +8,7 @@
  * A dim-tagged vector store with a two-stage ANN pipeline: Hamming prefilter
  * over a sign-bit sketch (top-m) followed by exact cosine rerank (top-k).
  * Built on the corm persistent map and the recall kernel (rec.h). Follows the
- * same standard as libjoint / libislet / libstoma (mk stack, ttypt headers).
+ * same standard as libjoint / libislet / liblemma (mk stack, ttypt headers).
  *
  * DESIGN CONTRACT
  *  - Refs are caller-opaque rec_ref_t (u32): the caller passes them at put
@@ -190,7 +190,7 @@ int sepal_sketch(const float *v, size_t n, uint64_t *words, size_t nwords);
  *    "query='TEXT' [m=M] [min_sim=S]"    embed TEXT server-side through
  *                                        the configured embedder
  *    (a non-empty `query` wins over `file=`; single-quoted values may
- *    contain spaces — stoma `query=` parity. Decode returns NULL on
+ *    contain spaces — lemma `query=` parity. Decode returns NULL on
  *    missing/unreadable file, missing qdim, empty query with no file,
  *    unconfigured embedder, fetch failure, or bad dims; the CLI then
  *    fails the query loud via corm_expr_error, never silent-empty.) */

@@ -17,7 +17,7 @@
 
 `libsepal` serves as the canonical **Meaning Axis** for vector similarity and recall composition:
 - **Storage Engine**: Optional file persistence backed by [libcorm](https://github.com/tty-pt/libcorm).
-- **Cross-Axis Recall Kernel**: Plugs into the unified recall loop (`sepal_fill_approx` + `sepal_rank`) to score candidate sets filtered by sibling axes: [libislet](https://github.com/tty-pt/libgeo) (Space), [libjoint](https://github.com/tty-pt/libit) (Time), and [libstoma](https://github.com/tty-pt/libstoma) (Text).
+- **Cross-Axis Recall Kernel**: Plugs into the unified recall loop (`sepal_fill_approx` + `sepal_rank`) to score candidate sets filtered by sibling axes: [libislet](https://github.com/tty-pt/libgeo) (Space), [libjoint](https://github.com/tty-pt/libit) (Time), and [liblemma](https://github.com/tty-pt/liblemma) (Text).
 
 ---
 
