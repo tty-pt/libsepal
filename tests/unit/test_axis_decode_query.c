@@ -13,7 +13,7 @@
  */
 
 #include "../test_common.h"
-#include <ttypt/rec.h>
+#include <ttypt/corm.h>
 #include <unistd.h>
 
 /* ── embed stub: canned 3-float vector, records received text + call count */

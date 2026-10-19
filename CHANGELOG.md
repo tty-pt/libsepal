@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0
+
+- **Vector Embedding Cache (`CORM_SEPAL_EMBED_CACHE`)**: File-backed disk cache for vector embeddings to avoid redundant network/model fetch overhead.
+- **Cormr Recall Kernel Integration**: Updated headers and tests to consume `<ttypt/corm.h>` and `<ttypt/cormr.h>`.
+- **Lemma Text Indexing Alignment**: Updated ecosystem references and test fixtures from `libstoma` to `liblemma`.
+- **Cleaned Build Flags**: Removed unused compiler options.
+
 ## 1.0.0
 
 - **First stable release** — semantic (meaning) axis vector store for the recall kernel: store float vectors with per-blob dimensions and query by meaning.

@@ -11,7 +11,11 @@ jobs:
     with:
       name: libsepal
       publish_to: "deb,apk,rpm,brew,openbsd,winget"
-      deps: "libcorm"
+      deps: "libcorm,libxxhash-dev"
+      deps_apk: "libcorm,xxhash-dev"
+      deps_rpm: "libcorm,xxhash-devel"
+      deps_brew: "libcorm,xxhash"
+      deps_openbsd: "libcorm,xxhash"
       deps_winget: "mingw-w64-x86_64-xxhash"
       deps_winget_tty: "libqsys,libcorm"
     secrets:

@@ -24,7 +24,7 @@
  */
 #include <stddef.h>
 #include <stdint.h>
-#include <ttypt/rec.h>
+#include <ttypt/corm.h>
 
 #ifdef __cplusplus
 extern "C" {
