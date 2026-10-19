@@ -9,7 +9,7 @@
  */
 
 #include "../test_common.h"
-#include <ttypt/rec.h>
+#include <ttypt/corm.h>
 
 #include <errno.h>
 
