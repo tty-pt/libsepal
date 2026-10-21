@@ -16,8 +16,27 @@
 ## Recall Kernel (Meaning Axis)
 
 `libsepal` serves as the canonical **Meaning Axis** for vector similarity and recall composition:
-- **Storage Engine**: Optional file persistence backed by [libcorm](https://github.com/tty-pt/libcorm).
-- **Cross-Axis Recall Kernel**: Plugs into the unified recall loop (`sepal_fill_approx` + `sepal_rank`) to score candidate sets filtered by sibling axes: [libislet](https://github.com/tty-pt/libgeo) (Space), [libjoint](https://github.com/tty-pt/libit) (Time), and [liblemma](https://github.com/tty-pt/liblemma) (Text).
+- **Storage Engine**: Optional file persistence and persistent vector caches backed by [libcorm](https://github.com/tty-pt/libcorm).
+- **Cross-Axis Recall Kernel**: Plugs into the unified recall loop (`sepal_fill_approx` + `sepal_rank`) to score candidate sets filtered by sibling axes: [libislet](https://github.com/tty-pt/libislet) (Space), [libjoint](https://github.com/tty-pt/libjoint) (Time), and [liblemma](https://github.com/tty-pt/liblemma) (Text).
+
+---
+
+## End-to-End Pipeline: Pairing with `libauren`
+
+Pair `libsepal` with [libauren](https://github.com/tty-pt/auren) for local neural semantic search:
+1. **Embedding Generation**: `libauren` takes raw text and outputs normalized float vectors (e.g. 384-dimensional vectors from `bge-small`).
+2. **Indexing**: `libsepal` encodes vectors into compact `VEC1` binary blobs, computing sign-bit sketches for instant Hamming prefiltering.
+3. **Querying**: When a user searches, `libauren` embeds the query and `libsepal` performs two-stage ANN search in under 50 microseconds.
+
+---
+
+## `CORM_SEPAL_EMBED_CACHE` Persistent Cache
+
+In `v1.1.0`, `libsepal` introduces `CORM_SEPAL_EMBED_CACHE`, a persistent file-backed vector cache:
+
+- **Avoids Re-Embedding**: Caches text hashes and corresponding float vectors to disk, eliminating redundant neural network evaluations across application restarts.
+- **Fast Zero-Copy Deserialization**: Stored in memory-mapped Corm tables for sub-microsecond retrieval.
+- **Configurable Storage**: Point `CORM_SEPAL_EMBED_CACHE=/path/to/embed.db` in your environment or daemon configuration.
 
 ---
 
