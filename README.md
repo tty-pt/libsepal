@@ -13,6 +13,30 @@
 
 ---
 
+## Why libsepal? (Searching by Meaning Instead of Exact Keywords)
+
+Keyword search fails when users express ideas differently:
+> *"A user searches for 'fast zero-copy RAM storage', but the documentation writes 'in-memory cache line mapping'."*
+
+Exact keyword matching misses the document entirely. Neural embeddings solve this by converting text into high-dimensional float vectors, but computing exact cosine distances across thousands of vectors in Python or bloated vector databases is slow and memory-intensive.
+
+`libsepal` provides a lightweight, two-stage Approximate Nearest Neighbor (ANN) vector store in pure C:
+
+```
+Query Vector ──────────────────────────────────────────────────────────────────┐
+                                                                               ▼
+Stage 1: Sign-Bit Sketch Prefilter (Hamming distance in L2 cache)
+[ 10,000 Vector Candidates ] ──────────────► [ Top 50 Finalists (99.5% discarded) ]
+                                                                               │
+Stage 2: Exact Cosine Reranking (AVX2 FMA floating-point math)                 ▼
+[ Top 50 Finalists ] ──────────────────────► [ Top 5 Semantic Matches (50 µs) ]
+```
+
+- **Compact Binary Footprint**: Matryoshka dimension truncation condenses 768-dimensional vectors from ~7 KB of raw text into 1,136-byte cache-friendly binary blobs (`VEC1`).
+- **Two-Stage Filtering**: Stage 1 performs bitwise popcounts over sign-bit sketches in L2 CPU cache, discarding 95–99% of candidates in nanoseconds; Stage 2 performs exact AVX2 FMA cosine reranking on only top finalists.
+
+---
+
 ## Recall Kernel (Meaning Axis)
 
 `libsepal` serves as the canonical **Meaning Axis** for vector similarity and recall composition:
