@@ -4,7 +4,7 @@ LDLIBS-libsepal := -lqsys -lcorm -lxxhash -lm
 
 CFLAGS := -g
 CFLAGS += -O3
-CFLAGS += -I/home/quirinpa/site/external/libcorm/include
+add-prefix := ../libcorm ../liblemma
 
 CFLAGS-x86_64 := -mpopcnt -mavx2 -mfma
 CFLAGS-amd64 := -mpopcnt -mavx2 -mfma

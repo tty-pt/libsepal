@@ -129,6 +129,8 @@ int sepal_configure_embeddings(const char *url, const char *model,
 
 int rec_axis_store(void *ctx, const char *spec, rec_ref_t ref,
                    const char *value);
+int rec_axis_store_typed(void *ctx, const char *spec, rec_ref_t ref,
+                         const void *blob, size_t len, uint32_t qtype);
 int rec_axis_unstore(void *ctx, rec_ref_t ref);
 int rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out,
                       size_t *n_out);
