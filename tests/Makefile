@@ -1,8 +1,8 @@
 # Test suite Makefile for libsepal
 
 CC = cc
-CFLAGS = -g -Wall -Wextra -Wno-unused-function -I../include -I/home/quirinpa/site/external/libcorm/include
-LDFLAGS = -L../lib -L/home/quirinpa/site/external/libcorm/lib -L/usr/lib
+CFLAGS = -g -Wall -Wextra -Wno-unused-function -I../include -I../../libcorm/include
+LDFLAGS = -L../lib -L../../libcorm/lib -L/usr/lib
 LDLIBS = -lsepal -lcorm -lqsys -lxxhash -lm
 
 export LD_LIBRARY_PATH := $(abspath ../lib):$(LD_LIBRARY_PATH)

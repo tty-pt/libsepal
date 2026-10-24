@@ -1,13 +1,22 @@
 # Changelog
 
-## 1.1.0
+## [1.2.0]
+
+- **HTOK Vector Embedding Ingestion (`rec_axis_store_typed`)**:
+  - Exported `rec_axis_store_typed` enabling direct ingestion of vector embeddings from `libhyle-source`'s `.tok` binary containers into the Sepal vector store.
+- **In-Memory Store Rebuilding & Caching**:
+  - Ephemeral in-memory vector store rebuilding and embedding cache synchronization.
+- **Linker Purity & DT_RUNPATH Elimination**:
+  - Stripped `-Wl,-rpath,/home/quirinpa/.local/lib` and hardcoded `/home/` paths from root and test Makefiles.
+
+## [1.1.0]
 
 - **Vector Embedding Cache (`CORM_SEPAL_EMBED_CACHE`)**: File-backed disk cache for vector embeddings to avoid redundant network/model fetch overhead.
 - **Cormr Recall Kernel Integration**: Updated headers and tests to consume `<ttypt/corm.h>` and `<ttypt/cormr.h>`.
 - **Lemma Text Indexing Alignment**: Updated ecosystem references and test fixtures from `libstoma` to `liblemma`.
 - **Cleaned Build Flags**: Removed unused compiler options.
 
-## 1.0.0
+## [1.0.0]
 
 - **First stable release** — semantic (meaning) axis vector store for the recall kernel: store float vectors with per-blob dimensions and query by meaning.
 - **Dim-tagged VEC1 blobs**: each vector stores its own exact-stage dim (`min(full_dim, 256)` matryoshka prefix) and a full-dim sign sketch — 1,136 bytes at 768/256 instead of ~7 KB of text. `sepal_blob_len`/`sepal_blob_hdr`/`sepal_blob_put` expose the format; garbage/truncation always decodes to 0, never a misread.
