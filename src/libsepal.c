@@ -8,6 +8,9 @@
  * corm_close() is never used (it would truncate the file to 0).
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "../include/ttypt/sepal.h"
 
 #include <ttypt/corm.h>
@@ -16,9 +19,15 @@
 #include <errno.h>
 #include <libgen.h>
 #include <math.h>
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <unistd.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <xxhash.h>
 
@@ -1452,7 +1461,8 @@ void *rec_axis_open(const char *spec)
 
 	/* L2: the cache dir is the store's own dir (<primary>-sepal lives
 	 * beside the primary), so the embed cache persists per-deployment
-	 * and needs no config. Memory-only specs ("", NULL) disable it. */
+	 * and needs no config. Memory-only specs ("", NULL) disable it.
+	 * Populate cache_dir from spec directory before rec_axis_env_config(). */
 	free(sepal_embed_cfg.cache_dir);
 	sepal_embed_cfg.cache_dir = NULL;
 	if (spec && *spec) {
@@ -1464,7 +1474,77 @@ void *rec_axis_open(const char *spec)
 			free(tmp);
 		}
 	}
-	return sepal_open(spec && *spec ? spec : NULL, &err);
+
+	/* Conventional env-config hook: prime embedder config before any rebuild or store */
+	rec_axis_env_config();
+
+	int is_ephemeral = 0;
+	const char *ephem = getenv("CORM_SEPAL_EPHEMERAL");
+	if (ephem && (strcmp(ephem, "1") == 0 || strcasecmp(ephem, "true") == 0)) {
+		is_ephemeral = 1;
+	}
+
+	const char *open_fname = (is_ephemeral || !spec || !*spec) ? NULL : spec;
+	sepal_vecstore_t *vs = sepal_open(open_fname, &err);
+	if (!vs)
+		return NULL;
+
+	/* In ephemeral mode, or when opening a fresh in-memory vector store,
+	 * rebuild vectors from the primary database using cached embeddings. */
+	if ((is_ephemeral || !spec || !*spec) && sepal_embed_cfg.url) {
+		char *primary = NULL;
+		const char *prim_env = getenv("CORM_AXIS_PRIMARY");
+		if (prim_env && *prim_env) {
+			primary = strdup(prim_env);
+		} else if (spec && *spec) {
+			const char *dash = strrchr(spec, '-');
+			if (dash && strcmp(dash, "-sepal") == 0) {
+				size_t plen = dash - spec;
+				primary = malloc(plen + 1);
+				if (primary) {
+					memcpy(primary, spec, plen);
+					primary[plen] = '\0';
+				}
+			}
+		}
+
+		if (primary && access(primary, R_OK) == 0) {
+			const char *vt = getenv("CORM_AXIS_VTYPE");
+			int is_blob = (vt && *vt == 'b');
+			uint32_t vtype = is_blob ? corm_blob_type() : CM_STR;
+
+			uint32_t hd = corm_open(primary, "hd", CM_HNDL, vtype, 0xFF, CM_AINDEX | CM_MIRROR);
+			if (hd != CM_MISS && hd > 0) {
+				struct timespec t0, t1;
+				clock_gettime(CLOCK_MONOTONIC, &t0);
+				uint32_t cur = corm_iter(hd, NULL, 0);
+				const void *key, *value;
+				size_t docs = 0;
+				while (corm_next(&key, &value, cur)) {
+					rec_ref_t ref = 0;
+					memcpy(&ref, key, corm_type_len(CM_HNDL));
+					if (value) {
+						if (is_blob) {
+							uint32_t blen = *(const uint32_t *)value;
+							const void *bdata = (const char *)value + sizeof(uint32_t);
+							rec_axis_store_typed(vs, NULL, ref, bdata, blen, vtype);
+						} else {
+							rec_axis_store(vs, NULL, ref, (const char *)value);
+						}
+						docs++;
+					}
+				}
+				corm_fin(cur);
+				clock_gettime(CLOCK_MONOTONIC, &t1);
+				double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+					+ (double)(t1.tv_nsec - t0.tv_nsec) / 1000000.0;
+				fprintf(stderr, "sepal: in-memory rebuilt %zu vectors from primary in %.2f ms\n", docs, ms);
+			}
+		}
+		free(primary);
+	}
+
+	return vs;
 }
 
 /*
@@ -1909,6 +1989,15 @@ sepal_embed_fetch(const char *text, float **vec_out, size_t *n_out)
 	int rc = -1;
 
 	*vec_out = NULL; *n_out = 0;
+
+	if (embed_cache_enabled() && sepal_embed_cfg.model) {
+		float *cached = embed_cache_get(sepal_embed_cfg.model, text, n_out);
+		if (cached) {
+			*vec_out = cached;
+			return 0;
+		}
+	}
+
 	if (sepal_curl_ensure() != 0) {
 		errno = EINVAL;                      /* no curl → reject, loud */
 		return -1;
@@ -1953,6 +2042,9 @@ sepal_embed_fetch(const char *text, float **vec_out, size_t *n_out)
 		free(v);
 		errno = ERANGE;
 		goto out;
+	}
+	if (embed_cache_enabled() && sepal_embed_cfg.model && v && n > 0) {
+		embed_cache_put(sepal_embed_cfg.model, text, v, n);
 	}
 	*vec_out = v;
 	*n_out = n;
@@ -2001,6 +2093,259 @@ rec_axis_store(void *ctx, const char *spec, rec_ref_t ref, const char *value)
 	r = sepal_put(vs, ref, v, n);
 	free(v);
 	return r;
+}
+
+static inline size_t sepal_unpack_varint(const uint8_t *src, size_t src_len, uint16_t *dst, size_t dst_cap) {
+	size_t s = 0, d = 0;
+	if (!src || !dst || dst_cap == 0) return 0;
+	while (s < src_len && d < dst_cap) {
+		uint8_t b = src[s++];
+		if (!(b & 0x80)) {
+			dst[d++] = (uint16_t)b;
+		} else {
+			if (s >= src_len) break;
+			uint8_t b2 = src[s++];
+			dst[d++] = (uint16_t)(b & 0x7f) | ((uint16_t)b2 << 7);
+		}
+	}
+	return d;
+}
+
+#define HTOK_MAGIC 0x48544F4B
+
+static inline uint32_t sepal_read_varint(const uint8_t **p_ptr, const uint8_t *end)
+{
+	uint32_t val = 0;
+	int shift = 0;
+	while (*p_ptr < end) {
+		uint8_t b = *(*p_ptr)++;
+		val |= (uint32_t)(b & 0x7f) << shift;
+		if (!(b & 0x80))
+			break;
+		shift += 7;
+	}
+	return val;
+}
+
+int
+rec_axis_store_typed(void *ctx, const char *spec, rec_ref_t ref,
+                     const void *blob, size_t len, uint32_t qtype)
+{
+	sepal_vecstore_t *vs = ctx;
+
+	(void)spec;
+	if (!vs || !blob || len == 0 || ref == UINT32_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (qtype == CM_STR) {
+		return rec_axis_store(ctx, spec, ref, (const char *)blob);
+	}
+
+	typedef int (*lemma_tok_decode_fn)(const void *vocab, const uint16_t *tokens, size_t n_tokens,
+	                                   char *dst, size_t dst_cap, size_t *bytes_written);
+	static lemma_tok_decode_fn s_decode = NULL;
+	static int s_decode_checked = 0;
+	if (!s_decode_checked) {
+#ifndef _WIN32
+		void *sym = dlsym(RTLD_DEFAULT, "lemma_tok_decode");
+		if (!sym) {
+			void *lh = dlopen("liblemma.so", RTLD_LAZY | RTLD_GLOBAL);
+			if (lh) sym = dlsym(lh, "lemma_tok_decode");
+		}
+		if (sym) memcpy(&s_decode, &sym, sizeof(s_decode));
+#endif
+		s_decode_checked = 1;
+	}
+
+	if (len >= 8 && *(const uint32_t *)blob == HTOK_MAGIC) {
+		if (!sepal_embed_cfg.url) {
+			/* Embedder not configured: return 0 as a soft no-op so fanout succeeds */
+			return 0;
+		}
+
+		uint16_t version = *(const uint16_t *)((const uint8_t *)blob + 4);
+		const uint8_t *p = (const uint8_t *)blob + 6;
+		const uint8_t *end = (const uint8_t *)blob + len;
+		uint16_t field_count = 0;
+
+		if (version >= 4) {
+			if (len < 12) return -1;
+			uint8_t flags = *((const uint8_t *)blob + 11);
+			p = (const uint8_t *)blob + 12;
+
+			if (flags & 0x01) { /* supersedes */
+				sepal_read_varint(&p, end);
+			}
+			if (flags & 0x02) { /* supersededBy */
+				sepal_read_varint(&p, end);
+			}
+			if (flags & 0x04) { /* evidence delta array */
+				uint32_t evid_count = sepal_read_varint(&p, end);
+				for (uint32_t i = 0; i < evid_count && p < end; i++) {
+					sepal_read_varint(&p, end);
+				}
+			}
+
+			uint32_t fc = sepal_read_varint(&p, end);
+			for (uint32_t i = 0; i < fc && p < end; i++) {
+				if (p >= end) break;
+				uint8_t var_tag = *p++;
+				uint8_t field_id = (var_tag >> 3) & 0x1f;
+				uint8_t type_tag = var_tag & 0x07;
+				if (field_id == 31) {
+					if (p >= end) break;
+					uint8_t nlen = *p++;
+					if (p + nlen > end) break;
+					p += nlen;
+				}
+				uint32_t data_len = sepal_read_varint(&p, end);
+				if (p + data_len > end) break;
+
+				if (field_id == 0 && type_tag == 1) {
+					size_t max_tok = data_len + 16;
+					uint16_t *tokens = malloc(max_tok * sizeof(uint16_t));
+					if (tokens) {
+						size_t ntok = sepal_unpack_varint(p, data_len, tokens, max_tok);
+						char *dec = malloc(ntok * 16 + 256);
+						if (dec) {
+							size_t bw = 0;
+							if (s_decode && s_decode(NULL, tokens, ntok, dec, ntok * 16 + 256, &bw) == 0 && bw > 0) {
+								float *v;
+								size_t n;
+								if (sepal_embed_fetch(dec, &v, &n) == 0) {
+									int r = sepal_put(vs, ref, v, n);
+									free(v);
+									free(dec);
+									free(tokens);
+									return r;
+								}
+							}
+							free(dec);
+						}
+						free(tokens);
+					}
+					return 0;
+				}
+				p += data_len;
+			}
+			return 0;
+		} else if (version >= 3) {
+			if (len < 16) return -1;
+			uint8_t flags = *((const uint8_t *)blob + 13);
+			size_t hdr_size = 14;
+			if (flags & 0x01) hdr_size += 4; /* supersedes */
+			if (flags & 0x02) hdr_size += 4; /* supersededBy */
+			if (flags & 0x04) {
+				if (hdr_size + 2 > len) return -1;
+				uint16_t evid_count = *(const uint16_t *)((const uint8_t *)blob + hdr_size);
+				hdr_size += 2 + (size_t)evid_count * 4;
+			}
+			if (hdr_size + 2 > len) return -1;
+			memcpy(&field_count, (const uint8_t *)blob + hdr_size, 2);
+			p = (const uint8_t *)blob + hdr_size + 2;
+
+			for (uint16_t i = 0; i < field_count && p < end; i++) {
+				if (p + 1 > end) break;
+				uint8_t nlen = *p++;
+				if (p + nlen + 3 > end) break;
+				char fname[64];
+				size_t copylen = nlen < sizeof(fname) - 1 ? nlen : sizeof(fname) - 1;
+				memcpy(fname, p, copylen);
+				fname[copylen] = '\0';
+				p += nlen;
+
+				uint8_t type_tag = *p++;
+				uint16_t data_len = 0;
+				memcpy(&data_len, p, 2); p += 2;
+				if (p + data_len > end) break;
+
+				if (type_tag == 1 && strcmp(fname, "text") == 0) {
+					size_t max_tok = data_len + 16;
+					uint16_t *tokens = malloc(max_tok * sizeof(uint16_t));
+					if (tokens) {
+						size_t ntok = sepal_unpack_varint(p, data_len, tokens, max_tok);
+						char *dec = malloc(ntok * 16 + 256);
+						if (dec) {
+							size_t bw = 0;
+							if (s_decode && s_decode(NULL, tokens, ntok, dec, ntok * 16 + 256, &bw) == 0 && bw > 0) {
+								float *v;
+								size_t n;
+								if (sepal_embed_fetch(dec, &v, &n) == 0) {
+									int r = sepal_put(vs, ref, v, n);
+									free(v);
+									free(dec);
+									free(tokens);
+									return r;
+								}
+							}
+							free(dec);
+						}
+						free(tokens);
+					}
+					return 0;
+				}
+				p += data_len;
+			}
+			return 0;
+		} else if (version >= 2) {
+			if (len < 26) return -1;
+			uint16_t evid_count = *(const uint16_t *)((const uint8_t *)blob + 22);
+			size_t hdr_size = 24 + (size_t)evid_count * 4;
+			if (hdr_size + 2 > len) return -1;
+			p = (const uint8_t *)blob + hdr_size;
+			memcpy(&field_count, p, 2); p += 2;
+		} else {
+			if (p + 2 > end) return -1;
+			memcpy(&field_count, p, 2); p += 2;
+		}
+
+		for (uint16_t i = 0; i < field_count && p < end; i++) {
+			if (p + 1 > end) break;
+			uint8_t nlen = *p++;
+			if (p + nlen + 2 > end) break;
+			char fname[64];
+			size_t copylen = nlen < sizeof(fname) - 1 ? nlen : sizeof(fname) - 1;
+			memcpy(fname, p, copylen);
+			fname[copylen] = '\0';
+			p += nlen;
+
+			uint16_t ntok = 0;
+			memcpy(&ntok, p, 2); p += 2;
+			if (p + (size_t)ntok * 2 > end) break;
+
+			const uint16_t *tokens = (const uint16_t *)p;
+			p += (size_t)ntok * 2;
+
+			if (strcmp(fname, "text") == 0) {
+				char *dec = malloc((size_t)ntok * 16 + 256);
+				if (!dec) return -1;
+				size_t bw = 0;
+				typedef int (*lemma_tok_decode_fn)(const void *vocab, const uint16_t *tokens, size_t n_tokens,
+				                                   char *dst, size_t dst_cap, size_t *bytes_written);
+				lemma_tok_decode_fn decode_fn = NULL;
+#ifndef _WIN32
+				void *sym = dlsym(RTLD_DEFAULT, "lemma_tok_decode");
+				if (sym) memcpy(&decode_fn, &sym, sizeof(decode_fn));
+#endif
+				if (decode_fn && decode_fn(NULL, tokens, ntok, dec, (size_t)ntok * 16 + 256, &bw) == 0 && bw > 0) {
+					float *v;
+					size_t n;
+					if (sepal_embed_fetch(dec, &v, &n) == 0) {
+						int r = sepal_put(vs, ref, v, n);
+						free(v);
+						free(dec);
+						return r;
+					}
+				}
+				free(dec);
+				return 0;
+			}
+		}
+		return 0;
+	}
+
+	return -1;
 }
 
 int

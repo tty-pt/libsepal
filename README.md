@@ -111,6 +111,7 @@ cc semantic_search.c $(pkg-config --cflags --libs sepal)
 | `sepal_search`| `size_t sepal_search(vs, q, dim, k, min_sim, m, hits)` | Run two-stage ANN search returning top-k best hits |
 | `sepal_fill_approx` | `int sepal_fill_approx(vs, q, dim, m, set)` | Stream candidate pool into a recall candidate set |
 | `sepal_rank` | `int sepal_rank(ctx, rec_ref_t ref, &score)` | Exact cosine reranking callback for the recall kernel |
+| `rec_axis_store_typed` | `int rec_axis_store_typed(ref, data, len, qtype, ctx)` | Ingest raw float vector embeddings directly from HTOK binary containers |
 | `sepal_close`| `void sepal_close(vs)` | Flush persistence and release memory |
 
 👉 *For VEC1 binary blob layouts, AVX2 FMA vectorization benchmarks, and examples, see [examples/README.md](examples/README.md).*
