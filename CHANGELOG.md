@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.2.0]
+## [1.3.0]
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/tty-pt/libsepal/main/assets/logo.png" alt="libsepal logo" width="220" />
