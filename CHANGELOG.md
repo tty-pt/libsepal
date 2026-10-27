@@ -2,10 +2,6 @@
 
 ## [1.3.0]
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/tty-pt/libsepal/main/assets/logo.png" alt="libsepal logo" width="220" />
-</p>
-
 - **HTOK Vector Embedding Ingestion (`rec_axis_store_typed`)**:
   - Exported `rec_axis_store_typed` enabling direct ingestion of vector embeddings from `libhyle-source`'s `.tok` binary containers into the Sepal vector store.
 - **In-Memory Store Rebuilding & Caching**:
