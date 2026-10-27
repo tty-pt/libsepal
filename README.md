@@ -89,10 +89,22 @@ Stage 2: Exact Cosine Reranking (AVX2 FMA floating-point math)                 â
 
 ---
 
-## 4. `CORM_SEPAL_EMBED_CACHE` Persistent Cache
+## 4. `corm` CLI Multi-Axis Integration
 
-`libsepal` supports `CORM_SEPAL_EMBED_CACHE`, a persistent file-backed vector cache:
-- **Zero Re-Embedding**: Caches text hashes and corresponding float vectors to disk, eliminating redundant neural network evaluations across application restarts.
+`libsepal` attaches directly to the `corm` CLI tool as the `@sepal` vector axis for semantic search:
+
+```bash
+# Ingest documents and generate vector embeddings (requires axil-auren or embedding endpoint):
+export CORM_SEPAL_EMBED_URL="http://127.0.0.1:4242/v1/embeddings"
+export CORM_SEPAL_EMBED_MODEL="bge-base"
+corm -p "High-performance vector similarity search in pure C" docs.db@sepal:a:s
+
+# Semantic similarity query via corm CLI:
+corm -X "sepal" --sepal="vector database" docs.db@sepal:a:s
+```
+
+`libsepal` also supports `CORM_SEPAL_EMBED_CACHE`, a persistent file-backed vector cache:
+- **Zero Re-Embedding**: Caches text hashes and corresponding float vectors to disk, eliminating redundant neural evaluations across restarts.
 - **Configuration**: Set `CORM_SEPAL_EMBED_CACHE=/path/to/embed.db` in your environment.
 
 ---
