@@ -48,7 +48,7 @@ Stage 2: Exact Cosine Reranking (AVX2 FMA floating-point math)                 â
 ## End-to-End Pipeline: Pairing with `libauren`
 
 Pair `libsepal` with [libauren](https://github.com/tty-pt/auren) for local neural semantic search:
-1. **Embedding Generation**: `libauren` takes raw text and outputs normalized float vectors (e.g. 384-dimensional vectors from `bge-small`).
+1. **Embedding Generation**: `libauren` takes raw text and outputs normalized float vectors (e.g. 384-dimensional vectors from `bge-small` or 768-dimensional vectors from `bge-base`).
 2. **Indexing**: `libsepal` encodes vectors into compact `VEC1` binary blobs, computing sign-bit sketches for instant Hamming prefiltering.
 3. **Querying**: When a user searches, `libauren` embeds the query and `libsepal` performs two-stage ANN search in under 50 microseconds.
 
