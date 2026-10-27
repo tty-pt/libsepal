@@ -9,64 +9,13 @@
 [![semantic-ANN](https://img.shields.io/badge/semantic-ANN-FF6B35)](#)
 [![Recall Kernel Meaning Axis](https://img.shields.io/badge/axis-meaning-blueviolet)](#)
 
-> Ultra-fast semantic vector store with two-stage ANN search (Hamming sign-bit sketch prefilter + exact cosine rerank) in pure C.
+> Ultra-fast semantic vector store with two-stage ANN search (Hamming sign-bit sketch prefilter + exact cosine rerank) in pure C. Canonical header is `<ttypt/sepal.h>`.
 
 ---
 
-## Why libsepal? (Searching by Meaning Instead of Exact Keywords)
+## 1. Quickstart
 
-Keyword search fails when users express ideas differently:
-> *"A user searches for 'fast zero-copy RAM storage', but the documentation writes 'in-memory cache line mapping'."*
-
-Exact keyword matching misses the document entirely. Neural embeddings solve this by converting text into high-dimensional float vectors, but computing exact cosine distances across thousands of vectors in Python or bloated vector databases is slow and memory-intensive.
-
-`libsepal` provides a lightweight, two-stage Approximate Nearest Neighbor (ANN) vector store in pure C:
-
-```
-Query Vector ──────────────────────────────────────────────────────────────────┐
-                                                                               ▼
-Stage 1: Sign-Bit Sketch Prefilter (Hamming distance in L2 cache)
-[ 10,000 Vector Candidates ] ──────────────► [ Top 50 Finalists (99.5% discarded) ]
-                                                                               │
-Stage 2: Exact Cosine Reranking (AVX2 FMA floating-point math)                 ▼
-[ Top 50 Finalists ] ──────────────────────► [ Top 5 Semantic Matches (50 µs) ]
-```
-
-- **Compact Binary Footprint**: Matryoshka dimension truncation condenses 768-dimensional vectors from ~7 KB of raw text into 1,136-byte cache-friendly binary blobs (`VEC1`).
-- **Two-Stage Filtering**: Stage 1 performs bitwise popcounts over sign-bit sketches in L2 CPU cache, discarding 95–99% of candidates in nanoseconds; Stage 2 performs exact AVX2 FMA cosine reranking on only top finalists.
-
----
-
-## Recall Kernel (Meaning Axis)
-
-`libsepal` serves as the canonical **Meaning Axis** for vector similarity and recall composition:
-- **Storage Engine**: Optional file persistence and persistent vector caches backed by [libcorm](https://github.com/tty-pt/libcorm).
-- **Cross-Axis Recall Kernel**: Plugs into the unified recall loop (`sepal_fill_approx` + `sepal_rank`) to score candidate sets filtered by sibling axes: [libislet](https://github.com/tty-pt/libislet) (Space), [libjoint](https://github.com/tty-pt/libjoint) (Time), and [liblemma](https://github.com/tty-pt/liblemma) (Text).
-
----
-
-## End-to-End Pipeline: Pairing with `libauren`
-
-Pair `libsepal` with [libauren](https://github.com/tty-pt/auren) for local neural semantic search:
-1. **Embedding Generation**: `libauren` takes raw text and outputs normalized float vectors (e.g. 384-dimensional vectors from `bge-small` or 768-dimensional vectors from `bge-base`).
-2. **Indexing**: `libsepal` encodes vectors into compact `VEC1` binary blobs, computing sign-bit sketches for instant Hamming prefiltering.
-3. **Querying**: When a user searches, `libauren` embeds the query and `libsepal` performs two-stage ANN search in under 50 microseconds.
-
----
-
-## `CORM_SEPAL_EMBED_CACHE` Persistent Cache
-
-In `v1.1.0`, `libsepal` introduces `CORM_SEPAL_EMBED_CACHE`, a persistent file-backed vector cache:
-
-- **Avoids Re-Embedding**: Caches text hashes and corresponding float vectors to disk, eliminating redundant neural network evaluations across application restarts.
-- **Fast Zero-Copy Deserialization**: Stored in memory-mapped Corm tables for sub-microsecond retrieval.
-- **Configurable Storage**: Point `CORM_SEPAL_EMBED_CACHE=/path/to/embed.db` in your environment or daemon configuration.
-
----
-
-## Quickstart
-
-Store 4D vector embeddings and perform nearest-neighbor semantic search in 15 lines:
+Store vector embeddings and perform nearest-neighbor semantic search in under 15 lines:
 
 ```c
 #include <stdio.h>
@@ -97,12 +46,16 @@ int main(void) {
 
 Compile and link:
 ```sh
-cc semantic_search.c $(pkg-config --cflags --libs sepal)
+cc semantic_search.c $(pkg-config --cflags --libs libsepal) -o semantic_search
 ```
+
+👉 *For full hybrid search setups paired with `axil-auren` and `liblemma`, see [docs/SEMANTIC_SEARCH.md](../../docs/SEMANTIC_SEARCH.md).*
 
 ---
 
-## Core API (The Essential 20%)
+## 2. Core API Reference
+
+The essential functions for vector storage and Approximate Nearest Neighbor (ANN) search:
 
 | Function | Signature | Description |
 | :--- | :--- | :--- |
@@ -114,22 +67,40 @@ cc semantic_search.c $(pkg-config --cflags --libs sepal)
 | `rec_axis_store_typed` | `int rec_axis_store_typed(ref, data, len, qtype, ctx)` | Ingest raw float vector embeddings directly from HTOK binary containers |
 | `sepal_close`| `void sepal_close(vs)` | Flush persistence and release memory |
 
-👉 *For VEC1 binary blob layouts, AVX2 FMA vectorization benchmarks, and examples, see [examples/README.md](examples/README.md).*
+---
+
+## 3. Two-Stage ANN Architecture
+
+`libsepal` converts high-dimensional float vectors into compact binary representations (`VEC1`) and searches them in two stages:
+
+```
+Query Vector ──────────────────────────────────────────────────────────────────┐
+                                                                               ▼
+Stage 1: Sign-Bit Sketch Prefilter (Hamming distance in L2 cache)
+[ 10,000 Vector Candidates ] ──────────────► [ Top 50 Finalists (99.5% discarded) ]
+                                                                               │
+Stage 2: Exact Cosine Reranking (AVX2 FMA floating-point math)                 ▼
+[ Top 50 Finalists ] ──────────────────────► [ Top 5 Semantic Matches (50 µs) ]
+```
+
+- **Compact Binary Footprint**: Matryoshka dimension truncation condenses 768-dimensional vectors from ~7 KB of raw text into 1,136-byte cache-friendly binary blobs (`VEC1`).
+- **Bitwise Hamming Prefilter**: Stage 1 performs bitwise popcounts over sign-bit sketches in L2 CPU cache, discarding 95–99% of candidates in nanoseconds.
+- **Exact AVX2 Cosine Rerank**: Stage 2 performs exact AVX2 FMA cosine reranking on only top finalists, finishing in under 50 microseconds.
 
 ---
 
-## Design Philosophy: Two-Stage ANN
+## 4. `CORM_SEPAL_EMBED_CACHE` Persistent Cache
 
-* **Compact VEC1 Blobs**: Uses matryoshka dimension truncation and sign-bit sketches to condense 768-dimensional vectors from ~7 KB of raw text into 1,136-byte cache-friendly binary blobs.
-* **Two-Stage Filtering**: Stage 1 performs bitwise Hamming popcounts over sign sketches in L2 CPU cache (~3× faster prefilter); Stage 2 performs exact AVX2 FMA cosine reranking on only top candidates.
-* **Recall Integrity**: Approximations are explicitly tracked with an owed recall bound (`m/n`), ensuring downstream ranking loops stay honest.
+`libsepal` supports `CORM_SEPAL_EMBED_CACHE`, a persistent file-backed vector cache:
+- **Zero Re-Embedding**: Caches text hashes and corresponding float vectors to disk, eliminating redundant neural network evaluations across application restarts.
+- **Configuration**: Set `CORM_SEPAL_EMBED_CACHE=/path/to/embed.db` in your environment.
 
 ---
 
-## Installation & Build
+## 5. Installation & Build
 
 ### Prebuilt Packages
-Prebuilt packages are distributed on tty.pt for Linux (APT / Alpine / Arch / Fedora-RHEL), macOS (Homebrew), Windows (winget / MSYS2), and OpenBSD. Follow the [installation instructions](https://github.com/tty-pt/ci/blob/main/docs/install.md) and use **libsepal** as the package name.
+Prebuilt packages for Linux (APT / Alpine / Arch / Fedora-RHEL), macOS (Homebrew), Windows (winget / MSYS2), and OpenBSD are distributed via [tty.pt packages](https://github.com/tty-pt/ci/blob/main/docs/install.md). Use **libsepal** as the package name.
 
 ### Build from Source
 ```sh
