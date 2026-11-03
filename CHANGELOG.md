@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1] - 2026-11-03
+
+- **Standalone `@tty-pt/sepal` Package & WebAssembly Vector Engine**:
+  - Published `@tty-pt/sepal` providing Node-API native bindings and pure WebAssembly fallback (`sepal.wasm`).
+  - Added `npm/wasm/sepal_wasm.c` exporting `sepal_cosine`, `sepal_wasm_sketch`, and `sepal_wasm_hamming` via `ISO_EXPORT`.
+  - Links with `-Wl,--import-memory` for zero-copy vector candidate ranking alongside `@tty-pt/corm` and `@tty-pt/joint`.
+  - Migrated build to centralized `make wasm` in `external/mk/include.mk` with post-link `wasm-opt -O3` optimization.
+
 ## [1.3.0]
 
 - **HTOK Vector Embedding Ingestion (`rec_axis_store_typed`)**:

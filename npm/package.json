@@ -1,6 +1,6 @@
 {
-  "name": "@ttypt/sepal",
-  "version": "0.1.0",
+  "name": "@tty-pt/sepal",
+  "version": "1.3.1",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libsepal Vector Cosine & Hamming Sketch Engine",
   "main": "dist/index.js",
@@ -14,10 +14,18 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include -I../../libcorm/include -I../../libqsys/include native/sepal_napi.c -L../lib -Wl,-rpath,../lib -L/usr/lib -lsepal -lcorm -lm -o build/Release/sepal_node.node 2>/dev/null || true",
-    "build:wasm": "clang --target=wasm32-wasi -mexec-model=reactor -Wl,--no-entry -Wl,--allow-undefined -Wl,--export=sepal_cosine -Wl,--export=malloc -Wl,--export=free -O3 -o dist/sepal.wasm wasm/sepal_wasm.c 2>/dev/null || true",
+    "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include native/sepal_napi.c -L../lib -Wl,-rpath,../lib -L/usr/lib -lsepal -lcorm -lm -o build/Release/sepal_node.node 2>/dev/null || true",
+    "build:wasm": "make -C .. wasm",
     "build": "npm run build:native && npm run build:wasm",
     "test": "node --test tests/sepal.test.mjs"
+  },
+  "peerDependencies": {
+    "@tty-pt/corm": ">=2.2.0",
+    "@tty-pt/stele": ">=1.5.0"
+  },
+  "devDependencies": {
+    "@tty-pt/corm": "^2.2.3",
+    "@tty-pt/stele": "^1.5.1"
   },
   "keywords": [
     "sepal",
