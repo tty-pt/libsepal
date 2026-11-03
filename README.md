@@ -4,7 +4,7 @@
 
 # libsepal
 
-[![npm](https://img.shields.io/badge/npm-@ttypt/sepal-CB3837?logo=npm)](npm/README.md)
+[![npm](https://img.shields.io/badge/npm-@tty-pt/sepal-CB3837?logo=npm)](npm/README.md)
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![semantic-ANN](https://img.shields.io/badge/semantic-ANN-FF6B35)](#)
@@ -124,12 +124,12 @@ sudo make install     # install headers and library to system
 
 ---
 
-## 6. JavaScript & WebAssembly Bindings (@ttypt/sepal)
+## 6. JavaScript & WebAssembly Bindings (@tty-pt/sepal)
 
 Official Node.js and Browser WebAssembly bindings are colocated in [`npm/`](npm/README.md):
 - **Two-Stage ANN Vector Search**: Fast bitwise Hamming sign-bit sketch pre-filtering with exact normalized cosine similarity reranking.
 - **Client-Side & Edge Semantic Search**: Run embeddings search in browser tabs and edge functions with precompiled `dist/sepal.wasm`.
-- **C Development Headers**: Install via `npm install @ttypt/sepal` and consume headers from `node_modules/@ttypt/sepal/include`.
+- **C Development Headers**: Install via `npm install @tty-pt/sepal` and consume headers from `node_modules/@tty-pt/sepal/include`.
 
 👉 *For complete TypeScript usage, vector indexing guides, and API reference, see [npm/README.md](npm/README.md).*
 

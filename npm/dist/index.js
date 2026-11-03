@@ -1,75 +1,76 @@
-import { createRequire } from "node:module";
-import path from "node:path";
+import { loadWasmModule, loadNativeAddon, getSubstrate } from "@tty-pt/stele";
 
-let nativeBinding = null;
-try {
-  const req = createRequire(import.meta.url);
-  nativeBinding = req("../build/Release/sepal_node.node");
-} catch {
-  try {
-    const req = createRequire(import.meta.url);
-    nativeBinding = req(path.join(process.cwd(), "build/Release/sepal_node.node"));
-  } catch {
-    // Fallback to pure JS
-  }
-}
+const nativeBinding = loadNativeAddon(import.meta.url, "sepal");
+let wasmInstance = null;
 
-function getSharedWasm() {
-  if (globalThis.__ttypt_shared_wasm__) {
-    return globalThis.__ttypt_shared_wasm__;
-  }
-  try {
-    const req = createRequire(import.meta.url);
-    const qsysPaths = [
-      path.join(path.dirname(import.meta.url.replace("file://", "")), "../../libqsys/npm/dist/index.js"),
-      path.join(process.cwd(), "node_modules/@ttypt/qsys/dist/index.js"),
-      "@ttypt/qsys"
-    ];
-    for (const p of qsysPaths) {
-      try {
-        const mod = req(p);
-        if (mod && mod.getSharedWasm) {
-          return mod.getSharedWasm();
-        }
-      } catch {}
-    }
-  } catch {}
-  return null;
+export function getSepalWasm() {
+  if (wasmInstance) return wasmInstance;
+  wasmInstance = loadWasmModule(new URL("./sepal.wasm", import.meta.url));
+  return wasmInstance;
 }
 
 /**
- * Calculates normalized cosine similarity between two float vectors
+ * Calculates normalized cosine similarity between two float vectors strictly via WebAssembly
  */
 export function cosineSimilarity(vecA, vecB) {
   if (nativeBinding && nativeBinding.cosine) {
     return nativeBinding.cosine(vecA, vecB);
   }
 
-  const wasm = getSharedWasm();
-  if (wasm && vecA && vecB && vecA.length === vecB.length && vecA.length > 0) {
-    const dim = vecA.length;
-    const ptrA = wasm.malloc(dim * 4);
-    const ptrB = wasm.malloc(dim * 4);
-    new Float32Array(wasm.memory.buffer, ptrA, dim).set(vecA);
-    new Float32Array(wasm.memory.buffer, ptrB, dim).set(vecB);
-    const score = wasm.sepal_cosine(ptrA, ptrB, dim);
-    wasm.free(ptrA);
-    wasm.free(ptrB);
-    return score;
+  if (!vecA || !vecB || vecA.length !== vecB.length || vecA.length === 0) {
+    return 0.0;
   }
 
-  // Pure JS fallback
-  if (!vecA || !vecB || vecA.length !== vecB.length) return 0.0;
-  let dot = 0.0;
-  let normA = 0.0;
-  let normB = 0.0;
-  for (let i = 0; i < vecA.length; i++) {
-    dot += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
+  const wasm = getSepalWasm();
+  const dim = vecA.length;
+  const ptrA = wasm.exports.malloc(dim * 4);
+  const ptrB = wasm.exports.malloc(dim * 4);
+  const mem = getSubstrate().memory.buffer;
+  new Float32Array(mem, ptrA, dim).set(vecA);
+  new Float32Array(mem, ptrB, dim).set(vecB);
+  const score = wasm.exports.sepal_cosine(ptrA, ptrB, dim);
+  wasm.exports.free(ptrA);
+  wasm.exports.free(ptrB);
+  return score;
+}
+
+/**
+ * Computes 1-bit sign sketch over float vector strictly via WebAssembly
+ */
+export function sketchVector(vec) {
+  if (!vec || vec.length === 0) return new BigUint64Array(0);
+  const wasm = getSepalWasm();
+  const dim = vec.length;
+  const nwords = Math.ceil(dim / 64);
+  const ptrV = wasm.exports.malloc(dim * 4);
+  const ptrWords = wasm.exports.malloc(nwords * 8);
+  const mem = getSubstrate().memory.buffer;
+  new Float32Array(mem, ptrV, dim).set(vec);
+  wasm.exports.sepal_wasm_sketch(ptrV, dim, ptrWords, nwords);
+  const words = new BigUint64Array(mem, ptrWords, nwords).slice();
+  wasm.exports.free(ptrV);
+  wasm.exports.free(ptrWords);
+  return words;
+}
+
+/**
+ * Computes bitwise Hamming distance between two 64-bit sketches strictly via WebAssembly
+ */
+export function hammingDistance(sketchA, sketchB) {
+  if (!sketchA || !sketchB || sketchA.length !== sketchB.length || sketchA.length === 0) {
+    return 0;
   }
-  if (normA === 0 || normB === 0) return 0.0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  const wasm = getSepalWasm();
+  const nwords = sketchA.length;
+  const ptrA = wasm.exports.malloc(nwords * 8);
+  const ptrB = wasm.exports.malloc(nwords * 8);
+  const mem = getSubstrate().memory.buffer;
+  new BigUint64Array(mem, ptrA, nwords).set(sketchA);
+  new BigUint64Array(mem, ptrB, nwords).set(sketchB);
+  const dist = wasm.exports.sepal_wasm_hamming(ptrA, ptrB, nwords);
+  wasm.exports.free(ptrA);
+  wasm.exports.free(ptrB);
+  return dist;
 }
 
 /**

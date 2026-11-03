@@ -3,7 +3,7 @@
 CC := cc
 CFLAGS := -g -Wall -Wextra -I../include -I/home/quirinpa/site/external/libqmap/include
 LDFLAGS := -L../lib -L/home/quirinpa/site/external/libqmap/lib -L/usr/lib
-LDLIBS := -lsepal -lqmap -lqsys -lxxhash -lm
+LDLIBS := -lsepal -lqmap -lstele -lxxhash -lm
 
 export LD_LIBRARY_PATH := $(abspath ../lib):/home/quirinpa/site/external/libqmap/lib:$(LD_LIBRARY_PATH)
 

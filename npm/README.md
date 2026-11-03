@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tty-pt/libsepal/main/assets/logo.png" alt="@ttypt/sepal logo" width="220" />
+  <img src="https://raw.githubusercontent.com/tty-pt/libsepal/main/assets/logo.png" alt="@tty-pt/sepal logo" width="220" />
 </p>
 
-# @ttypt/sepal
+# @tty-pt/sepal
 
-[![npm version](https://img.shields.io/badge/npm-v0.1.0-CB3837?logo=npm)](#)
+[![npm version](https://img.shields.io/badge/npm-v1.3.2-CB3837?logo=npm)](#)
 [![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![TypeScript Ready](https://img.shields.io/badge/TypeScript-Ready-3178C6?logo=typescript)](#)
 [![Node.js Native](https://img.shields.io/badge/Node.js-N--API-339933?logo=node.js)](#)
@@ -18,11 +18,11 @@
 ## 1. Quickstart
 
 ```bash
-npm install @ttypt/sepal
+npm install @tty-pt/sepal
 ```
 
 ```typescript
-import { cosineSimilarity, VectorIndex } from "@ttypt/sepal";
+import { cosineSimilarity, VectorIndex } from "@tty-pt/sepal";
 
 // 1. Normalized vector cosine similarity calculation
 const sim = cosineSimilarity([0.1, 0.9, 0.0], [0.0, 1.0, 0.0]);
@@ -48,7 +48,28 @@ console.log("Top matches:", hits); // [{ ref: 101, score: 0.99 }, ...]
 
 ---
 
-## 3. Dual-Engine Runtime
+## 3. JavaScript / TypeScript API Reference
+
+### `cosineSimilarity(vecA: number[] | Float32Array, vecB: number[] | Float32Array): number`
+Computes the normalized cosine similarity $\frac{\vec{A} \cdot \vec{B}}{\|\vec{A}\| \|\vec{B}\|}$ between two dense float vectors. **Executes strictly in compiled WebAssembly / C** via `sepal_cosine()`.
+
+### `VectorIndex`
+Persistent or in-memory vector index:
+* `constructor(filePath?: string)`: Opens database or creates in-memory vector store.
+* `.put(ref: number, vector: number[]): boolean`: Stores dense embedding vector for reference ID.
+* `.search(queryVector: number[], k?: number, minScore?: number): Array<{ ref: number, score: number }>`: Performs cosine nearest-neighbor search, returning top-k matching references ranked by similarity.
+
+### `SepalVectorAxis`
+Plug-and-play Semantic Vector Axis adapter for the Corm Recall Kernel (`@tty-pt/corm`):
+* `.registerVector(ref: number, vector: number[]): void`
+* `.rank(params: { queryVector: number[] }, ref: number): number`
+
+### `getSepalWasm(): WebAssembly.Instance`
+Returns the WebAssembly instance loaded on the Stele shared-memory substrate.
+
+---
+
+## 4. Dual-Engine Runtime
 
 - **Node.js**: Native C99 addon (`build/Release/sepal_node.node`) with hardware AVX2/popcount SIMD acceleration.
 - **Browser & Edge**: Precompiled `dist/sepal.wasm` reactor with zero native compilation prerequisites.
@@ -58,7 +79,7 @@ console.log("Top matches:", hits); // [{ ref: 101, score: 0.99 }, ...]
 ## 4. C Development Headers via NPM
 
 ```makefile
-CFLAGS += -I./node_modules/@ttypt/sepal/include
+CFLAGS += -I./node_modules/@tty-pt/sepal/include
 LDLIBS += -lsepal
 ```
 

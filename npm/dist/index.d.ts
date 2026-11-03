@@ -1,4 +1,6 @@
 export declare function cosineSimilarity(vecA: number[], vecB: number[]): number;
+export declare function sketchVector(vec: number[] | Float32Array): BigUint64Array;
+export declare function hammingDistance(sketchA: BigUint64Array, sketchB: BigUint64Array): number;
 
 export declare class VectorIndex {
   constructor(filePath?: string);

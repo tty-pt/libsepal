@@ -14,7 +14,7 @@
 #include "../include/ttypt/sepal.h"
 
 #include <ttypt/corm.h>
-#include <ttypt/qsys.h>
+#include <ttypt/stele.h>
 
 #include <errno.h>
 #include <libgen.h>
@@ -1816,28 +1816,28 @@ sepal_curl_ensure(void)
 	if (sepal_curl.loaded)
 		return 0;
 	for (i = 0; names[i]; i++) {
-		sepal_curl_dl = qsys_dlopen(names[i], 0);
+		sepal_curl_dl = stl_dlopen(names[i], 0);
 		if (sepal_curl_dl)
 			break;
 	}
 	if (!sepal_curl_dl)
 		return -1;
-	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_init");
+	sym = stl_dlsym(sepal_curl_dl, "curl_easy_init");
 	memcpy(&sepal_curl.easy_init, &sym, sizeof(sepal_curl.easy_init));
-	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_setopt");
+	sym = stl_dlsym(sepal_curl_dl, "curl_easy_setopt");
 	memcpy(&sepal_curl.easy_setopt, &sym, sizeof(sepal_curl.easy_setopt));
-	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_perform");
+	sym = stl_dlsym(sepal_curl_dl, "curl_easy_perform");
 	memcpy(&sepal_curl.easy_perform, &sym, sizeof(sepal_curl.easy_perform));
-	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_cleanup");
+	sym = stl_dlsym(sepal_curl_dl, "curl_easy_cleanup");
 	memcpy(&sepal_curl.easy_cleanup, &sym,
 	       sizeof(sepal_curl.easy_cleanup));
-	sym = qsys_dlsym(sepal_curl_dl, "curl_easy_getinfo");
+	sym = stl_dlsym(sepal_curl_dl, "curl_easy_getinfo");
 	memcpy(&sepal_curl.easy_getinfo, &sym,
 	       sizeof(sepal_curl.easy_getinfo));
-	sym = qsys_dlsym(sepal_curl_dl, "curl_slist_append");
+	sym = stl_dlsym(sepal_curl_dl, "curl_slist_append");
 	memcpy(&sepal_curl.slist_append, &sym,
 	       sizeof(sepal_curl.slist_append));
-	sym = qsys_dlsym(sepal_curl_dl, "curl_slist_free_all");
+	sym = stl_dlsym(sepal_curl_dl, "curl_slist_free_all");
 	memcpy(&sepal_curl.slist_free_all, &sym,
 	       sizeof(sepal_curl.slist_free_all));
 	if (!sepal_curl.easy_init || !sepal_curl.easy_setopt ||

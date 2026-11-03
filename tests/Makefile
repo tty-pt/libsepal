@@ -3,7 +3,7 @@
 CC = cc
 CFLAGS = -g -Wall -Wextra -Wno-unused-function -I../include -I../../libcorm/include
 LDFLAGS = -L../lib -L../../libcorm/lib -L/usr/lib
-LDLIBS = -lsepal -lcorm -lqsys -lxxhash -lm
+LDLIBS = -lsepal -lcorm -lstele -lxxhash -lm
 
 export LD_LIBRARY_PATH := $(abspath ../lib):$(LD_LIBRARY_PATH)
 
