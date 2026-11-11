@@ -4,7 +4,7 @@
 
 # libsepal
 
-[![npm](https://img.shields.io/badge/npm-@tty-pt/sepal-CB3837?logo=npm)](npm/README.md)
+[![npm](https://img.shields.io/badge/npm-@tty--pt/sepal-CB3837?logo=npm)](npm/README.md)
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![semantic-ANN](https://img.shields.io/badge/semantic-ANN-FF6B35)](#)
