@@ -1,6 +1,6 @@
 {
   "name": "@tty-pt/sepal",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libsepal Vector Cosine & Hamming Sketch Engine",
   "main": "dist/index.js",

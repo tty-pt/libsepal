@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.2] - 2026-11-13
+
+- **Packaging**:
+  - Requires `@tty-pt/corm` >=2.3.3 (`^2.3.3`) and `@tty-pt/stele` >=1.6.2 (`^1.6.2`).
+  - The npm tarball is built once by CI, with a self-contained native addon per platform (`prebuilds/<os>-<cpu>/`) next to `sepal.wasm`, and published as verified.
+
 ## [1.4.1] - 2026-11-13
 
 - **Disjoint Global-Base & Detached Buffer Safety (`sepal.wasm`)**:
