@@ -12,8 +12,8 @@ export function getSepalWasm() {
 /**
  * Calculates normalized cosine similarity between two float vectors strictly via WebAssembly
  */
-export function cosineSimilarity(vecA, vecB) {
-  if (nativeBinding && nativeBinding.cosine) {
+export function cosineSimilarity(vecA, vecB, options = {}) {
+  if (!options.wasm && nativeBinding && nativeBinding.cosine) {
     return nativeBinding.cosine(vecA, vecB);
   }
 
@@ -44,10 +44,9 @@ export function sketchVector(vec) {
   const nwords = Math.ceil(dim / 64);
   const ptrV = wasm.exports.malloc(dim * 4);
   const ptrWords = wasm.exports.malloc(nwords * 8);
-  const mem = getSubstrate().memory.buffer;
-  new Float32Array(mem, ptrV, dim).set(vec);
+  new Float32Array(getSubstrate().memory.buffer, ptrV, dim).set(vec);
   wasm.exports.sepal_wasm_sketch(ptrV, dim, ptrWords, nwords);
-  const words = new BigUint64Array(mem, ptrWords, nwords).slice();
+  const words = new BigUint64Array(getSubstrate().memory.buffer, ptrWords, nwords).slice();
   wasm.exports.free(ptrV);
   wasm.exports.free(ptrWords);
   return words;

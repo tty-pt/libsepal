@@ -9,7 +9,6 @@ CFLAGS-x86_64 := -mpopcnt -mavx2 -mfma
 CFLAGS-amd64 := -mpopcnt -mavx2 -mfma
 
 WASM_SRCS := npm/wasm/sepal_wasm.c
-WASM_LDFLAGS += -Wl,--import-memory
 
 include ../mk/include.mk
 
