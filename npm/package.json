@@ -1,6 +1,6 @@
 {
   "name": "@tty-pt/sepal",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libsepal Vector Cosine & Hamming Sketch Engine",
   "main": "dist/index.js",
@@ -20,12 +20,12 @@
     "test": "node --test tests/sepal.test.mjs"
   },
   "peerDependencies": {
-    "@tty-pt/corm": ">=2.3.1",
-    "@tty-pt/stele": ">=1.6.0"
+    "@tty-pt/corm": ">=2.3.2",
+    "@tty-pt/stele": ">=1.6.1"
   },
   "devDependencies": {
-    "@tty-pt/corm": "^2.3.1",
-    "@tty-pt/stele": "^1.6.0"
+    "@tty-pt/corm": "^2.3.2",
+    "@tty-pt/stele": "^1.6.1"
   },
   "keywords": [
     "sepal",

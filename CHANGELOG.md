@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.1] - 2026-11-13
+
+- **Disjoint Global-Base & Detached Buffer Safety (`sepal.wasm`)**:
+  - Rebuilt `sepal.wasm` shared-memory reactor at `--global-base=1572864` and fixed memory growth ordering before TypedArray construction.
+  - Upgraded `@tty-pt/corm` to `>=2.3.2` (`^2.3.2`) and `@tty-pt/stele` to `>=1.6.1` (`^1.6.1`).
+
 ## [1.4.0] - 2026-11-13
 
 - **Substrate & Corm v2.3.1 Alignment**:
