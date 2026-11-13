@@ -20,11 +20,11 @@
     "test": "node --test tests/sepal.test.mjs"
   },
   "peerDependencies": {
-    "@tty-pt/corm": ">=2.3.0",
+    "@tty-pt/corm": ">=2.3.1",
     "@tty-pt/stele": ">=1.6.0"
   },
   "devDependencies": {
-    "@tty-pt/corm": "^2.3.0",
+    "@tty-pt/corm": "^2.3.1",
     "@tty-pt/stele": "^1.6.0"
   },
   "keywords": [
