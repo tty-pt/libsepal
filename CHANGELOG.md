@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.0] - 2026-11-13
+
+- **Substrate & Corm v2.3.0 Alignment**:
+  - Upgraded dependencies to @tty-pt/corm@^2.3.0 (>=2.3.0) and @tty-pt/stele@^1.6.0 (>=1.6.0).
+  - Maintained zero-copy vector candidate ranking and Matryoshka dimension scaling.
+
 ## [1.3.2] - 2026-11-03
 
 - **Standalone `@tty-pt/sepal` Package & WebAssembly Vector Engine**:
