@@ -1618,7 +1618,8 @@ void *rec_axis_open(const char *spec)
 				clock_gettime(CLOCK_MONOTONIC, &t1);
 				double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
 					+ (double)(t1.tv_nsec - t0.tv_nsec) / 1000000.0;
-				fprintf(stderr, "sepal: in-memory rebuilt %zu vectors from primary in %.2f ms\n", docs, ms);
+				if (docs > 0 && !getenv("CORM_QUIET"))
+					fprintf(stderr, "sepal: in-memory rebuilt %zu vectors from primary in %.2f ms\n", docs, ms);
 			}
 		}
 		free(primary);
@@ -1655,7 +1656,7 @@ int rec_axis_env_config(void)
 	}
 	if (!url || !model)
 		return 0;               /* unconfigured: offline floats-direct */
-	if (sepal_configure_embeddings(url, model, key) != 0)
+	if (sepal_configure_embeddings(url, model, key) != 0 && !getenv("CORM_QUIET"))
 		fprintf(stderr, "sepal: inconsistent CORM_SEPAL_EMBED_* pair; "
 				"stays unconfigured\n");
 	return 0;
@@ -2042,9 +2043,24 @@ sepal_embed_body(const char *model, const char *text)
 	used = (size_t)snprintf(b, ml + tl * 2 + 64,
 	                        "{\"model\":\"%s\",\"input\":\"", model);
 	for (i = 0; i < tl; i++) {
-		if (text[i] == '"' || text[i] == '\\')
+		unsigned char c = (unsigned char)text[i];
+		if (c == '"' || c == '\\') {
 			b[used++] = '\\';
-		b[used++] = text[i];
+			b[used++] = (char)c;
+		} else if (c == '\n') {
+			b[used++] = '\\';
+			b[used++] = 'n';
+		} else if (c == '\r') {
+			b[used++] = '\\';
+			b[used++] = 'r';
+		} else if (c == '\t') {
+			b[used++] = '\\';
+			b[used++] = 't';
+		} else if (c < 0x20) {
+			b[used++] = ' ';
+		} else {
+			b[used++] = (char)c;
+		}
 	}
 	b[used++] = '"';
 	b[used++] = '}';
@@ -2437,6 +2453,23 @@ rec_axis_store_typed(void *ctx, const char *spec, rec_ref_t ref,
 			}
 		}
 		return 0;
+	}
+
+	/* Plain UTF-8 text stored in a :b primary (e.g. SessionStore / CodeStore):
+	 * copy into a NUL-terminated buffer and delegate to rec_axis_store. */
+	if (len > 0 && len <= 1024 * 1024) {
+		char *str = malloc(len + 1);
+		if (!str)
+			return -1;
+		memcpy(str, blob, len);
+		str[len] = '\0';
+		const char *embed_str = str;
+		const char *sum_tag = strstr(str, "[SUMMARY]\n");
+		if (sum_tag)
+			embed_str = sum_tag + 10;
+		int r = rec_axis_store(ctx, spec, ref, embed_str);
+		free(str);
+		return r;
 	}
 
 	return -1;

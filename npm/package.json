@@ -15,7 +15,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include -I../../libcorm/include native/sepal_napi.c -L../lib -L../../libcorm/lib -Wl,-rpath,\\$ORIGIN/../../../lib:\\$ORIGIN/../../../../libcorm/lib -L/usr/lib -lsepal -lcorm -lm -o build/Release/sepal_node.node",
+    "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include -I../../libcorm/include native/sepal_napi.c -L../lib -L../../libcorm/lib -Wl,-rpath,'$ORIGIN:$ORIGIN/../../corm/prebuilds/linux-x64:$ORIGIN/../../../corm/prebuilds/linux-x64:$ORIGIN/../../../lib:$ORIGIN/../../../../libcorm/lib' -L/usr/lib -lsepal -lcorm -lm -o build/Release/sepal_node.node",
     "build:wasm": "make -C .. wasm",
     "build": "npm run build:native && npm run build:wasm",
     "test": "node --test tests/sepal.test.mjs"
