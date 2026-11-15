@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- **In-Memory Embedding Cache, Curl Timeouts, Multiline JSON Escaping & `:b` UTF-8 Text Indexing (`src/libsepal.c`, `npm/package.json`)**:
+  - Cached `sepal-embed-cache.bin` in memory (`g_embed_mem_cache`) with `stat` size/`mtime` invalidation, eliminating repeated disk reads on embedding cache lookups.
+  - Added fast curl connection and request timeouts (`SEPAL_EMBED_CONNECT_TIMEOUT_MS` default 500 ms, `SEPAL_EMBED_TIMEOUT_MS` default 2500 ms, `CURLOPT_NOSIGNAL=1`) in `sepal_embed_fetch`.
+  - Properly escaped `\n`, `\r`, `\t`, and control characters (`< 0x20`) in `sepal_embed_body` JSON payloads so multiline summaries and code snippets embed cleanly.
+  - Supported plain UTF-8 text (and `[SUMMARY]\n` header extraction) in `:b` binary primary stores (`SessionStore`, `CodeStore`) inside `rec_axis_store_typed`.
+  - Gated stderr diagnostics on `CORM_QUIET` and added standalone prebuild RPATH in `npm/package.json`.
+
 ## [1.5.1] - 2026-11-14
 
 - **Packaging (`npm/package.json`)**:

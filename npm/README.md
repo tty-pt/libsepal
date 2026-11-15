@@ -4,7 +4,7 @@
 
 # @tty-pt/sepal
 
-[![npm version](https://img.shields.io/badge/npm-v1.3.2-CB3837?logo=npm)](#)
+[![npm version](https://img.shields.io/badge/npm-v1.5.1-CB3837?logo=npm)](#)
 [![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![TypeScript Ready](https://img.shields.io/badge/TypeScript-Ready-3178C6?logo=typescript)](#)
 [![Node.js Native](https://img.shields.io/badge/Node.js-N--API-339933?logo=node.js)](#)
@@ -55,14 +55,23 @@ Computes the normalized cosine similarity $\frac{\vec{A} \cdot \vec{B}}{\|\vec{A
 
 ### `VectorIndex`
 Persistent or in-memory vector index:
-* `constructor(filePath?: string)`: Opens database or creates in-memory vector store.
-* `.put(ref: number, vector: number[]): boolean`: Stores dense embedding vector for reference ID.
-* `.search(queryVector: number[], k?: number, minScore?: number): Array<{ ref: number, score: number }>`: Performs cosine nearest-neighbor search, returning top-k matching references ranked by similarity.
+* `constructor(filePath?: string, dbName?: string)`: Opens database or creates in-memory vector store.
+* `.put(ref: number, vector: number[] | Float32Array): boolean`: Stores dense embedding vector for reference ID.
+* `.get(ref: number): Float32Array | null`: Reads stored vector for reference ID.
+* `.del(ref: number): boolean`: Deletes vector entry for reference ID.
+* `.count(): number`: Returns total number of stored vectors.
+* `.search(queryVector: number[] | Float32Array, k?: number, minScore?: number, candidateMultiplier?: number): Array<{ ref: number, score: number }>`: Performs two-stage ANN cosine nearest-neighbor search, returning top-k matching references ranked by similarity.
+* `.close(): void`: Flushes persistence and closes the store.
 
 ### `SepalVectorAxis`
 Plug-and-play Semantic Vector Axis adapter for the Corm Recall Kernel (`@tty-pt/corm`):
-* `.registerVector(ref: number, vector: number[]): void`
-* `.rank(params: { queryVector: number[] }, ref: number): number`
+* `.registerVector(ref: number, vector: number[] | Float32Array): void`
+* `.unstore(ref: number): boolean`
+* `.fillApprox(queryVector: number[] | Float32Array, m?: number): number[]`
+* `.rank(params: { queryVector: number[] | Float32Array }, ref: number): number`
+* `.storeTyped(ref: number, data: Uint8Array | Buffer, qtype?: number): boolean`
+* `.configureEmbeddings(dim: number): void`
+* `.envConfig(): void`
 
 ### `getSepalWasm(): WebAssembly.Instance`
 Returns the WebAssembly instance loaded on the Stele shared-memory substrate.
