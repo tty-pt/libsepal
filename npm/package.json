@@ -1,12 +1,13 @@
 {
   "name": "@tty-pt/sepal",
-  "version": "1.3.2",
+  "version": "1.5.1",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libsepal Vector Cosine & Hamming Sketch Engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "prebuilds",
     "include",
     "assets",
     "*.pc",
@@ -14,18 +15,18 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include native/sepal_napi.c -L../lib -Wl,-rpath,../lib -L/usr/lib -lsepal -lcorm -lm -o build/Release/sepal_node.node 2>/dev/null || true",
+    "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include -I../../libcorm/include native/sepal_napi.c -L../lib -L../../libcorm/lib -Wl,-rpath,\\$ORIGIN/../../../lib:\\$ORIGIN/../../../../libcorm/lib -L/usr/lib -lsepal -lcorm -lm -o build/Release/sepal_node.node",
     "build:wasm": "make -C .. wasm",
     "build": "npm run build:native && npm run build:wasm",
     "test": "node --test tests/sepal.test.mjs"
   },
   "peerDependencies": {
-    "@tty-pt/corm": ">=2.2.0",
-    "@tty-pt/stele": ">=1.5.0"
+    "@tty-pt/corm": ">=2.4.0",
+    "@tty-pt/stele": ">=1.7.0"
   },
   "devDependencies": {
-    "@tty-pt/corm": "^2.2.4",
-    "@tty-pt/stele": "^1.5.2"
+    "@tty-pt/corm": "^2.4.0",
+    "@tty-pt/stele": "^1.7.0"
   },
   "keywords": [
     "sepal",
