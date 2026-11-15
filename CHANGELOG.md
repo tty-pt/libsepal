@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.2] - 2026-11-15
 
 - **In-Memory Embedding Cache, Curl Timeouts, Multiline JSON Escaping & `:b` UTF-8 Text Indexing (`src/libsepal.c`, `npm/package.json`)**:
   - Cached `sepal-embed-cache.bin` in memory (`g_embed_mem_cache`) with `stat` size/`mtime` invalidation, eliminating repeated disk reads on embedding cache lookups.
