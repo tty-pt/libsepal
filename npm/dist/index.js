@@ -10,15 +10,14 @@ export function getSepalWasm() {
 }
 
 /**
- * Calculates normalized cosine similarity between two float vectors strictly via WebAssembly
+ * Calculates normalized cosine similarity between two float vectors
  */
-export function cosineSimilarity(vecA, vecB) {
-  if (nativeBinding && nativeBinding.cosine) {
-    return nativeBinding.cosine(vecA, vecB);
-  }
-
+export function cosineSimilarity(vecA, vecB, options = {}) {
   if (!vecA || !vecB || vecA.length !== vecB.length || vecA.length === 0) {
     return 0.0;
+  }
+  if (!options.wasm && nativeBinding && nativeBinding.cosine) {
+    return nativeBinding.cosine(vecA, vecB);
   }
 
   const wasm = getSepalWasm();
@@ -35,30 +34,35 @@ export function cosineSimilarity(vecA, vecB) {
 }
 
 /**
- * Computes 1-bit sign sketch over float vector strictly via WebAssembly
+ * Computes 1-bit sign sketch over float vector
  */
-export function sketchVector(vec) {
+export function sketchVector(vec, options = {}) {
   if (!vec || vec.length === 0) return new BigUint64Array(0);
+  if (!options.wasm && nativeBinding && nativeBinding.sketch) {
+    return nativeBinding.sketch(vec);
+  }
   const wasm = getSepalWasm();
   const dim = vec.length;
   const nwords = Math.ceil(dim / 64);
   const ptrV = wasm.exports.malloc(dim * 4);
   const ptrWords = wasm.exports.malloc(nwords * 8);
-  const mem = getSubstrate().memory.buffer;
-  new Float32Array(mem, ptrV, dim).set(vec);
+  new Float32Array(getSubstrate().memory.buffer, ptrV, dim).set(vec);
   wasm.exports.sepal_wasm_sketch(ptrV, dim, ptrWords, nwords);
-  const words = new BigUint64Array(mem, ptrWords, nwords).slice();
+  const words = new BigUint64Array(getSubstrate().memory.buffer, ptrWords, nwords).slice();
   wasm.exports.free(ptrV);
   wasm.exports.free(ptrWords);
   return words;
 }
 
 /**
- * Computes bitwise Hamming distance between two 64-bit sketches strictly via WebAssembly
+ * Computes bitwise Hamming distance between two 64-bit sketches
  */
-export function hammingDistance(sketchA, sketchB) {
+export function hammingDistance(sketchA, sketchB, options = {}) {
   if (!sketchA || !sketchB || sketchA.length !== sketchB.length || sketchA.length === 0) {
     return 0;
+  }
+  if (!options.wasm && nativeBinding && nativeBinding.hamming) {
+    return nativeBinding.hamming(sketchA, sketchB);
   }
   const wasm = getSepalWasm();
   const nwords = sketchA.length;
@@ -73,63 +77,108 @@ export function hammingDistance(sketchA, sketchB) {
   return dist;
 }
 
+export function configureEmbeddings(url, model, apiKey = "") {
+  if (!nativeBinding || !nativeBinding.configureEmbeddings) {
+    throw new Error("@tty-pt/sepal native addon is required for configureEmbeddings");
+  }
+  return nativeBinding.configureEmbeddings(url || "", model || "", apiKey || "");
+}
+
 /**
- * VectorIndex: Persistent or in-memory vector index
+ * VectorIndex: Persistent or in-memory vector store backed strictly by libsepal C engine
  */
 export class VectorIndex {
   constructor(filePath = "") {
-    this.filePath = filePath;
-    this.handle = null;
-    this._memVectors = new Map();
-
-    if (nativeBinding && nativeBinding.open) {
-      this.handle = nativeBinding.open(this.filePath);
+    if (!nativeBinding || !nativeBinding.open) {
+      throw new Error("@tty-pt/sepal native addon is required for VectorIndex");
     }
+    this.filePath = filePath;
+    this.handle = nativeBinding.open(this.filePath);
   }
 
   put(ref, vector) {
-    if (nativeBinding && this.handle) {
-      return nativeBinding.put(this.handle, ref, vector);
-    }
-    this._memVectors.set(ref, vector);
-    return true;
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.put(this.handle, Number(ref), vector);
   }
 
-  search(queryVector, k = 10, minScore = 0.0) {
-    if (nativeBinding && this.handle) {
-      return nativeBinding.search(this.handle, queryVector, k, minScore);
-    }
+  get(ref) {
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.get(this.handle, Number(ref));
+  }
 
-    const scored = [];
-    for (const [ref, vec] of this._memVectors.entries()) {
-      const sim = cosineSimilarity(queryVector, vec);
-      if (sim >= minScore) {
-        scored.push({ ref, score: sim });
-      }
+  del(ref) {
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.del(this.handle, Number(ref));
+  }
+
+  count() {
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.count(this.handle);
+  }
+
+  search(queryVector, k = 10, minScore = 0.0, m = 0) {
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.search(this.handle, queryVector, k, minScore, m);
+  }
+
+  fillApprox(queryVector, m = 64, minScore = -1.0) {
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.fillApprox(this.handle, queryVector, m, minScore);
+  }
+
+  rank(queryVector, ref, minScore = -1.0) {
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.rank(this.handle, queryVector, Number(ref), minScore);
+  }
+
+  storeTyped(ref, uint8Array, qtype = 0) {
+    if (!this.handle) throw new Error("VectorIndex is closed");
+    return nativeBinding.storeTyped(this.handle, Number(ref), uint8Array, qtype);
+  }
+
+  close() {
+    if (this.handle) {
+      nativeBinding.close(this.handle);
+      this.handle = null;
     }
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, k);
   }
 }
 
 /**
- * Pluggable CormAxis implementation for the Corm Recall Kernel
+ * Pluggable CormAxis implementation for the Corm Recall Kernel backed strictly by libsepal C engine
  */
 export class SepalVectorAxis {
   constructor(filePath = "") {
     this.name = "vector";
     this.index = new VectorIndex(filePath);
-    this._vectors = new Map();
   }
 
   registerVector(ref, vector) {
     this.index.put(ref, vector);
-    this._vectors.set(ref, vector);
+  }
+
+  unstore(ref) {
+    return this.index.del(ref);
+  }
+
+  storeTyped(ref, uint8Array, qtype = 0) {
+    return this.index.storeTyped(ref, uint8Array, qtype);
+  }
+
+  fill(params) {
+    if (!params?.queryVector) return [];
+    const m = params.m ?? 64;
+    const minScore = params.minScore ?? -1.0;
+    return this.index.fillApprox(params.queryVector, m, minScore);
   }
 
   rank(params, ref) {
-    const vec = this._vectors.get(ref);
-    if (!vec || !params.queryVector) return 0.0;
-    return cosineSimilarity(params.queryVector, vec);
+    if (!params?.queryVector) return 0.0;
+    const minScore = params.minScore ?? -1.0;
+    return this.index.rank(params.queryVector, ref, minScore);
+  }
+
+  close() {
+    this.index.close();
   }
 }

@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.5.2] - 2026-11-15
+
+- **In-Memory Embedding Cache, Curl Timeouts, Multiline JSON Escaping & `:b` UTF-8 Text Indexing (`src/libsepal.c`, `npm/package.json`)**:
+  - Cached `sepal-embed-cache.bin` in memory (`g_embed_mem_cache`) with `stat` size/`mtime` invalidation, eliminating repeated disk reads on embedding cache lookups.
+  - Added fast curl connection and request timeouts (`SEPAL_EMBED_CONNECT_TIMEOUT_MS` default 500 ms, `SEPAL_EMBED_TIMEOUT_MS` default 2500 ms, `CURLOPT_NOSIGNAL=1`) in `sepal_embed_fetch`.
+  - Properly escaped `\n`, `\r`, `\t`, and control characters (`< 0x20`) in `sepal_embed_body` JSON payloads so multiline summaries and code snippets embed cleanly.
+  - Supported plain UTF-8 text (and `[SUMMARY]\n` header extraction) in `:b` binary primary stores (`SessionStore`, `CodeStore`) inside `rec_axis_store_typed`.
+  - Gated stderr diagnostics on `CORM_QUIET` and added standalone prebuild RPATH in `npm/package.json`.
+
+## [1.5.1] - 2026-11-14
+
+- **Packaging (`npm/package.json`)**:
+  - Explicitly included `"prebuilds"` in `npm/package.json` `"files"`.
+
+## [1.5.0] - 2026-11-14
+
+- **Complete Node-API Bindings & Zero-Copy Float32Array Support (`npm/native/sepal_napi.c`, `npm/dist/index.js`)**:
+  - Bound `close` (`sepal_close`), `del` (`sepal_del`), `get` (`sepal_get`), `count` (`sepal_n`), `sketch` (`sepal_sketch`), `hamming`, `fillApprox` (`sepal_fill`), `rank` (`sepal_rank`), `storeTyped` (`rec_axis_store_typed`), `configureEmbeddings`, and `envConfig` with zero-copy `Float32Array` extraction.
+  - Removed `_memVectors` and `_vectors` JS `Map` fallbacks in `VectorIndex` and `SepalVectorAxis`.
+  - Requires `@tty-pt/corm` >=2.4.0 (`^2.4.0`) and `@tty-pt/stele` >=1.7.0 (`^1.7.0`).
+
+## [1.4.2] - 2026-11-13
+
+- **Packaging**:
+  - Requires `@tty-pt/corm` >=2.3.3 (`^2.3.3`) and `@tty-pt/stele` >=1.6.2 (`^1.6.2`).
+  - The npm tarball is built once by CI, with a self-contained native addon per platform (`prebuilds/<os>-<cpu>/`) next to `sepal.wasm`, and published as verified.
+
+## [1.4.1] - 2026-11-13
+
+- **Disjoint Global-Base & Detached Buffer Safety (`sepal.wasm`)**:
+  - Rebuilt `sepal.wasm` shared-memory reactor at `--global-base=1572864` and fixed memory growth ordering before TypedArray construction.
+  - Upgraded `@tty-pt/corm` to `>=2.3.2` (`^2.3.2`) and `@tty-pt/stele` to `>=1.6.1` (`^1.6.1`).
+
+## [1.4.0] - 2026-11-13
+
+- **Substrate & Corm v2.3.1 Alignment**:
+  - Upgraded dependencies to @tty-pt/corm@^2.3.1 (>=2.3.1) and @tty-pt/stele@^1.6.0 (>=1.6.0).
+  - Maintained zero-copy vector candidate ranking and Matryoshka dimension scaling.
+
 ## [1.3.2] - 2026-11-03
 
 - **Standalone `@tty-pt/sepal` Package & WebAssembly Vector Engine**:

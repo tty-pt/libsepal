@@ -1330,10 +1330,85 @@ embed_cache_key_build(const char *model, const char *text, char **out)
 	return ml + tl + 2;
 }
 
+static struct {
+	char          *path;
+	unsigned char *buf;
+	size_t         len;
+	size_t         cap;
+	time_t         mtime_sec;
+	long           mtime_nsec;
+	off_t          file_size;
+} g_embed_mem_cache;
+
+static long
+stat_mtime_nsec(const struct stat *st)
+{
+#if defined(__APPLE__)
+	return st->st_mtimespec.tv_nsec;
+#elif defined(_WIN32)
+	(void)st;
+	return 0;
+#else
+	return st->st_mtim.tv_nsec;
+#endif
+}
+
+static const unsigned char *
+embed_cache_load_buf(const char *path, size_t *len_out)
+{
+	struct stat st;
+
+	*len_out = 0;
+	if (stat(path, &st) != 0 || st.st_size < 8 ||
+			st.st_size > SE_EMBED_CACHE_MAX)
+		return NULL;
+
+	long nsec = stat_mtime_nsec(&st);
+	if (g_embed_mem_cache.buf && g_embed_mem_cache.path &&
+			!strcmp(g_embed_mem_cache.path, path) &&
+			g_embed_mem_cache.file_size == st.st_size &&
+			g_embed_mem_cache.mtime_sec == st.st_mtime &&
+			g_embed_mem_cache.mtime_nsec == nsec) {
+		*len_out = g_embed_mem_cache.len;
+		return g_embed_mem_cache.buf;
+	}
+
+	size_t need = (size_t)st.st_size;
+	if (need > g_embed_mem_cache.cap) {
+		size_t ncap = need < 65536 ? 65536 : need;
+		unsigned char *nbuf = realloc(g_embed_mem_cache.buf, ncap);
+		if (!nbuf)
+			return NULL;
+		g_embed_mem_cache.buf = nbuf;
+		g_embed_mem_cache.cap = ncap;
+	}
+
+	FILE *f = fopen(path, "rb");
+	if (!f)
+		return NULL;
+	size_t rd = fread(g_embed_mem_cache.buf, 1, need, f);
+	fclose(f);
+	if (rd != need)
+		return NULL;
+
+	if (!g_embed_mem_cache.path || strcmp(g_embed_mem_cache.path, path) != 0) {
+		char *np = strdup(path);
+		if (!np)
+			return NULL;
+		free(g_embed_mem_cache.path);
+		g_embed_mem_cache.path = np;
+	}
+	g_embed_mem_cache.len = rd;
+	g_embed_mem_cache.file_size = st.st_size;
+	g_embed_mem_cache.mtime_sec = st.st_mtime;
+	g_embed_mem_cache.mtime_nsec = nsec;
+	*len_out = rd;
+	return g_embed_mem_cache.buf;
+}
+
 static float *
 embed_cache_get(const char *model, const char *text, size_t *n_out)
 {
-	struct stat st;
 	char *key = NULL;
 	size_t klen = embed_cache_key_build(model, text, &key);
 	float *hit = NULL;
@@ -1346,23 +1421,10 @@ embed_cache_get(const char *model, const char *text, size_t *n_out)
 		free(key);
 		return NULL;
 	}
-	if (stat(path, &st) != 0 || st.st_size < 8 ||
-			st.st_size > SE_EMBED_CACHE_MAX)
+	size_t rd = 0;
+	const unsigned char *src = embed_cache_load_buf(path, &rd);
+	if (!src || rd < 8)
 		goto out;
-	unsigned char *src = malloc((size_t)st.st_size);
-	if (!src)
-		goto out;
-	FILE *f = fopen(path, "rb");
-	if (!f) {
-		free(src);
-		goto out;
-	}
-	size_t rd = fread(src, 1, (size_t)st.st_size, f);
-	fclose(f);
-	if (rd != (size_t)st.st_size) {
-		free(src);
-		goto out;
-	}
 	size_t off = 0;
 	while (off + 2 <= rd) {
 		size_t kl = (size_t)src[off] | ((size_t)src[off + 1] << 8);
@@ -1390,7 +1452,6 @@ embed_cache_get(const char *model, const char *text, size_t *n_out)
 		}
 		off = end;
 	}
-	free(src);
 out:
 	free(path);
 	free(key);
@@ -1410,7 +1471,8 @@ embed_cache_put(const char *model, const char *text,
 	if (!klen || !v || n == 0 || n > SEPAL_VEC_MAX)
 		goto out;
 	dim = n;
-	if (2 + klen + 4 + dim * sizeof(float) > SE_EMBED_CACHE_MAX)
+	size_t rec_len = 2 + klen + 4 + dim * sizeof(float);
+	if (rec_len > SE_EMBED_CACHE_MAX)
 		goto out;
 	path = embed_cache_path();
 	if (!path)
@@ -1420,7 +1482,7 @@ embed_cache_put(const char *model, const char *text,
 	FILE *f = fopen(path, "ab");
 	if (!f)
 		goto out;
-	unsigned char *rec = malloc(2 + klen + 4 + dim * sizeof(float));
+	unsigned char *rec = malloc(rec_len);
 	if (!rec) {
 		fclose(f);
 		goto out;
@@ -1428,11 +1490,29 @@ embed_cache_put(const char *model, const char *text,
 	embed_cache_append_key(rec, key, klen);
 	embed_cache_append_dim(rec + 2 + klen, dim);
 	memcpy(rec + 2 + klen + 4, v, dim * sizeof(float));
-	size_t wrote = fwrite(rec, 1, 2 + klen + 4 + dim * sizeof(float), f);
+	size_t wrote = fwrite(rec, 1, rec_len, f);
 	fclose(f);
+	if (wrote == rec_len && g_embed_mem_cache.buf && g_embed_mem_cache.path &&
+			!strcmp(g_embed_mem_cache.path, path) &&
+			g_embed_mem_cache.len + rec_len <= SE_EMBED_CACHE_MAX) {
+		size_t nlen = g_embed_mem_cache.len + rec_len;
+		if (nlen <= g_embed_mem_cache.cap ||
+				(g_embed_mem_cache.buf = realloc(g_embed_mem_cache.buf, nlen * 2)) != NULL) {
+			if (nlen > g_embed_mem_cache.cap)
+				g_embed_mem_cache.cap = nlen * 2;
+			memcpy(g_embed_mem_cache.buf + g_embed_mem_cache.len, rec, rec_len);
+			g_embed_mem_cache.len = nlen;
+			if (stat(path, &st) == 0) {
+				g_embed_mem_cache.file_size = st.st_size;
+				g_embed_mem_cache.mtime_sec = st.st_mtime;
+				g_embed_mem_cache.mtime_nsec = stat_mtime_nsec(&st);
+			}
+		} else {
+			g_embed_mem_cache.cap = 0;
+			g_embed_mem_cache.len = 0;
+		}
+	}
 	free(rec);
-	(void) wrote;
-	(void) wrote;
 out:
 	free(path);
 	free(key);
@@ -1538,7 +1618,8 @@ void *rec_axis_open(const char *spec)
 				clock_gettime(CLOCK_MONOTONIC, &t1);
 				double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
 					+ (double)(t1.tv_nsec - t0.tv_nsec) / 1000000.0;
-				fprintf(stderr, "sepal: in-memory rebuilt %zu vectors from primary in %.2f ms\n", docs, ms);
+				if (docs > 0 && !getenv("CORM_QUIET"))
+					fprintf(stderr, "sepal: in-memory rebuilt %zu vectors from primary in %.2f ms\n", docs, ms);
 			}
 		}
 		free(primary);
@@ -1575,7 +1656,7 @@ int rec_axis_env_config(void)
 	}
 	if (!url || !model)
 		return 0;               /* unconfigured: offline floats-direct */
-	if (sepal_configure_embeddings(url, model, key) != 0)
+	if (sepal_configure_embeddings(url, model, key) != 0 && !getenv("CORM_QUIET"))
 		fprintf(stderr, "sepal: inconsistent CORM_SEPAL_EMBED_* pair; "
 				"stays unconfigured\n");
 	return 0;
@@ -1778,15 +1859,18 @@ format_comma_floats(const float *v, size_t n)
  * NO build-time or offline dependency on curl). Only the symbols the
  * embedder needs are resolved. Option/info values are the documented
  * CURLoption/CURLINFO ABI numbers (no curl headers needed at build). */
-#define SE_CURLOPT_URL            10002
-#define SE_CURLOPT_POSTFIELDS     10015
-#define SE_CURLOPT_HTTPHEADER     10023
-#define SE_CURLOPT_WRITEFUNCTION  20011
-#define SE_CURLOPT_WRITEDATA      10001
-#define SE_CURLOPT_POST           47
-#define SE_CURLOPT_SSL_VERIFYPEER 64
-#define SE_CURLOPT_SSL_VERIFYHOST 81
-#define SE_CURLINFO_RESPONSE_CODE 0x200002
+#define SE_CURLOPT_URL               10002
+#define SE_CURLOPT_POSTFIELDS        10015
+#define SE_CURLOPT_HTTPHEADER        10023
+#define SE_CURLOPT_WRITEFUNCTION     20011
+#define SE_CURLOPT_WRITEDATA         10001
+#define SE_CURLOPT_POST              47
+#define SE_CURLOPT_SSL_VERIFYPEER    64
+#define SE_CURLOPT_SSL_VERIFYHOST    81
+#define SE_CURLOPT_NOSIGNAL          99
+#define SE_CURLOPT_TIMEOUT_MS        155
+#define SE_CURLOPT_CONNECTTIMEOUT_MS 156
+#define SE_CURLINFO_RESPONSE_CODE    0x200002
 
 struct sepal_curl_syms {
 	int   loaded;
@@ -1959,9 +2043,24 @@ sepal_embed_body(const char *model, const char *text)
 	used = (size_t)snprintf(b, ml + tl * 2 + 64,
 	                        "{\"model\":\"%s\",\"input\":\"", model);
 	for (i = 0; i < tl; i++) {
-		if (text[i] == '"' || text[i] == '\\')
+		unsigned char c = (unsigned char)text[i];
+		if (c == '"' || c == '\\') {
 			b[used++] = '\\';
-		b[used++] = text[i];
+			b[used++] = (char)c;
+		} else if (c == '\n') {
+			b[used++] = '\\';
+			b[used++] = 'n';
+		} else if (c == '\r') {
+			b[used++] = '\\';
+			b[used++] = 'r';
+		} else if (c == '\t') {
+			b[used++] = '\\';
+			b[used++] = 't';
+		} else if (c < 0x20) {
+			b[used++] = ' ';
+		} else {
+			b[used++] = (char)c;
+		}
 	}
 	b[used++] = '"';
 	b[used++] = '}';
@@ -2028,6 +2127,17 @@ sepal_embed_fetch(const char *text, float **vec_out, size_t *n_out)
 	sepal_curl.easy_setopt(curl, SE_CURLOPT_WRITEDATA, &resp);
 	sepal_curl.easy_setopt(curl, SE_CURLOPT_SSL_VERIFYPEER, 1L);
 	sepal_curl.easy_setopt(curl, SE_CURLOPT_SSL_VERIFYHOST, 2L);
+	sepal_curl.easy_setopt(curl, SE_CURLOPT_NOSIGNAL, 1L);
+	{
+		const char *ct_env = getenv("SEPAL_EMBED_CONNECT_TIMEOUT_MS");
+		const char *tt_env = getenv("SEPAL_EMBED_TIMEOUT_MS");
+		long ct_ms = (ct_env && *ct_env) ? strtol(ct_env, NULL, 10) : 500L;
+		long tt_ms = (tt_env && *tt_env) ? strtol(tt_env, NULL, 10) : 2500L;
+		if (ct_ms > 0)
+			sepal_curl.easy_setopt(curl, SE_CURLOPT_CONNECTTIMEOUT_MS, ct_ms);
+		if (tt_ms > 0)
+			sepal_curl.easy_setopt(curl, SE_CURLOPT_TIMEOUT_MS, tt_ms);
+	}
 	if (sepal_curl.easy_perform(curl) != 0)
 		goto out;
 	sepal_curl.easy_getinfo(curl, SE_CURLINFO_RESPONSE_CODE, &code);
@@ -2343,6 +2453,23 @@ rec_axis_store_typed(void *ctx, const char *spec, rec_ref_t ref,
 			}
 		}
 		return 0;
+	}
+
+	/* Plain UTF-8 text stored in a :b primary (e.g. SessionStore / CodeStore):
+	 * copy into a NUL-terminated buffer and delegate to rec_axis_store. */
+	if (len > 0 && len <= 1024 * 1024) {
+		char *str = malloc(len + 1);
+		if (!str)
+			return -1;
+		memcpy(str, blob, len);
+		str[len] = '\0';
+		const char *embed_str = str;
+		const char *sum_tag = strstr(str, "[SUMMARY]\n");
+		if (sum_tag)
+			embed_str = sum_tag + 10;
+		int r = rec_axis_store(ctx, spec, ref, embed_str);
+		free(str);
+		return r;
 	}
 
 	return -1;
