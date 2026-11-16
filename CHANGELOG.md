@@ -47,8 +47,9 @@
   - Links with `-Wl,--import-memory` for zero-copy vector candidate ranking alongside `@tty-pt/corm` and `@tty-pt/joint`.
   - Adopted strict `peerDependencies` (`@tty-pt/stele: ">=1.5.0"`, `@tty-pt/corm: ">=2.2.0"`) and `devDependencies` (`@tty-pt/stele: "^1.5.2"`, `@tty-pt/corm: "^2.2.4"`).
   - Migrated build to centralized `make wasm` in `external/mk/include.mk` with post-link `wasm-opt -O3` optimization.
-- **HTOK Vector Embedding Ingestion (`rec_axis_store_typed`)**:
+- **HTOK Vector Embedding Ingestion (`rec_axis_store_typed`) & In-Memory Caching**:
   - Exported `rec_axis_store_typed` enabling direct ingestion of vector embeddings from `libhyle-source`'s `.tok` binary containers into the Sepal vector store.
+  - Added ephemeral in-memory vector store rebuilding and embedding cache synchronization, and stripped hardcoded linker RUNPATHs.
 
 ## [1.1.0]
 
